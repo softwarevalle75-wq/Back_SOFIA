@@ -520,6 +520,19 @@ function isAppointmentChangeHourCommand(text: string): boolean {
   return normalized.includes('cambiar hora') || normalized === 'hora';
 }
 
+function isAppointmentAvailabilityQuestion(text: string): boolean {
+  const normalized = normalizeForMatch(text);
+  return normalized.includes('horas disponibles')
+    || normalized.includes('horarios disponibles')
+    || normalized.includes('que horas hay')
+    || normalized.includes('qué horas hay')
+    || normalized.includes('que horas quedan')
+    || normalized.includes('qué horas quedan')
+    || normalized.includes('cuales horas')
+    || normalized.includes('cuáles horas')
+    || normalized.includes('disponibilidad');
+}
+
 function isAppointmentChangeFullNameCommand(text: string): boolean {
   const normalized = normalizeForMatch(text);
   return normalized.includes('cambiar nombre') || normalized === 'nombre';
@@ -2299,6 +2312,64 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       };
     }
 
+    if (isAppointmentAvailabilityQuestion(input.text)) {
+      const mode = appointment.mode === 'virtual' || appointment.mode === 'presencial'
+        ? appointment.mode
+        : undefined;
+      const day = pickWeekday(String(appointment.day ?? ''));
+
+      if (!mode || !day) {
+        conversationStore.set(key, {
+          stage: 'awaiting_appointment_day',
+          category: 'laboral',
+          profile,
+        });
+        return {
+          responseText: 'Para mostrarte disponibilidad exacta necesito el día de la cita. Indica un día entre lunes y viernes.',
+          patch: { intent: 'consulta_laboral', step: 'ask_appointment_day', profile },
+          payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'availability_day_missing' },
+        };
+      }
+
+      const availability = await fetchChatbotAvailability({
+        correlationId: input.correlationId,
+        day,
+        mode,
+      });
+      const availableHours = availability?.hours24 ?? [];
+      const nextProfile = {
+        ...profile,
+        appointmentAvailableHours: availableHours,
+      };
+
+      if (availability && availableHours.length === 0) {
+        conversationStore.set(key, {
+          stage: 'awaiting_appointment_day',
+          category: 'laboral',
+          profile: nextProfile,
+        });
+        return {
+          responseText: `No quedan cupos para ${formatWeekday(day)} en modalidad ${mode}. Indica otro día entre lunes y viernes.`,
+          patch: { intent: 'consulta_laboral', step: 'ask_appointment_day', profile: nextProfile },
+          payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'availability_no_slots' },
+        };
+      }
+
+      conversationStore.set(key, {
+        stage: 'awaiting_appointment_time',
+        category: 'laboral',
+        profile: nextProfile,
+      });
+
+      return {
+        responseText: availability
+          ? `${buildAvailableHoursText(mode, availableHours)} Escribe una de esas horas.`
+          : `${appointmentHourHint(mode)} Indica la hora de tu cita.`,
+        patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile: nextProfile },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'availability_listed' },
+      };
+    }
+
     if (isAppointmentConfirmCommand(input.text)) {
       const isEditOnly = profile.appointmentEditOnly === true;
       const userData = pickAppointmentUserData(profile);
@@ -2355,15 +2426,40 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
           if (!reprogrammed) {
             const availability = await fetchChatbotAvailability({ correlationId: input.correlationId, day, mode });
             const availableHours = availability?.hours24 ?? [];
+            const profileWithAvailability = {
+              ...profile,
+              appointmentAvailableHours: availableHours,
+            };
+
+            if (availability && availableHours.length === 0) {
+              conversationStore.set(key, {
+                stage: 'awaiting_appointment_day',
+                category: 'laboral',
+                profile: profileWithAvailability,
+              });
+              return {
+                responseText: `No fue posible reprogramar en ese horario porque ya se ocupó y no quedan cupos para ${formatWeekday(day)} en modalidad ${mode}. Indica otro día entre lunes y viernes.`,
+                patch: {
+                  intent: 'consulta_laboral',
+                  step: 'ask_appointment_day',
+                  profile: profileWithAvailability,
+                },
+                payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'reschedule_day_full' },
+              };
+            }
+
+            conversationStore.set(key, {
+              stage: 'awaiting_appointment_time',
+              category: 'laboral',
+              profile: profileWithAvailability,
+            });
+
             return {
-              responseText: `No fue posible reprogramar en ese horario porque ya se ocupó. ${buildAvailableHoursText(mode, availableHours)} Indica otra hora.`,
+              responseText: `No fue posible reprogramar en ese horario porque ya se ocupó. ${buildAvailableHoursText(mode, availableHours)} Indica una de esas horas.`,
               patch: {
                 intent: 'consulta_laboral',
                 step: 'ask_appointment_time',
-                profile: {
-                  ...profile,
-                  appointmentAvailableHours: availableHours,
-                },
+                profile: profileWithAvailability,
               },
               payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'reschedule_slot_taken' },
             };
@@ -2424,15 +2520,40 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       if (!scheduled) {
         const availability = await fetchChatbotAvailability({ correlationId: input.correlationId, day, mode });
         const availableHours = availability?.hours24 ?? [];
+        const profileWithAvailability = {
+          ...profile,
+          appointmentAvailableHours: availableHours,
+        };
+
+        if (availability && availableHours.length === 0) {
+          conversationStore.set(key, {
+            stage: 'awaiting_appointment_day',
+            category: 'laboral',
+            profile: profileWithAvailability,
+          });
+          return {
+            responseText: `No fue posible agendar en ese horario porque ya se ocupó y no quedan cupos para ${formatWeekday(day)} en modalidad ${mode}. Indica otro día entre lunes y viernes.`,
+            patch: {
+              intent: 'consulta_laboral',
+              step: 'ask_appointment_day',
+              profile: profileWithAvailability,
+            },
+            payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'schedule_day_full' },
+          };
+        }
+
+        conversationStore.set(key, {
+          stage: 'awaiting_appointment_time',
+          category: 'laboral',
+          profile: profileWithAvailability,
+        });
+
         return {
-          responseText: `No fue posible agendar en ese horario porque ya se ocupó. ${buildAvailableHoursText(mode, availableHours)} Indica otra hora.`,
+          responseText: `No fue posible agendar en ese horario porque ya se ocupó. ${buildAvailableHoursText(mode, availableHours)} Indica una de esas horas.`,
           patch: {
             intent: 'consulta_laboral',
             step: 'ask_appointment_time',
-            profile: {
-              ...profile,
-              appointmentAvailableHours: availableHours,
-            },
+            profile: profileWithAvailability,
           },
           payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'schedule_slot_taken' },
         };
