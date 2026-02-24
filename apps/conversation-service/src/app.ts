@@ -1,10 +1,11 @@
 import express from 'express';
+import type { Express } from 'express';
 import cors from 'cors';
 import { requestIdMiddleware, httpLoggerMiddleware } from '@sofia/observability';
 import { v1Router } from './routes/v1.routes';
 import { errorHandler } from './middlewares/error-handler';
 
-export const app = express();
+export const app: Express = express();
 
 app.use(cors());
 app.use(express.json());

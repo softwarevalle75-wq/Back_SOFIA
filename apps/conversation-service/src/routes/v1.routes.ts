@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Router as ExpressRouter } from 'express';
 import { conversationController } from '../controllers/conversation.controller';
 import {
   ConversationParamsDto,
@@ -12,7 +13,7 @@ import {
 import { requireTenantScope } from '../middlewares/tenant-scope';
 import { validate } from '../middlewares/validate';
 
-export const v1Router = Router();
+export const v1Router: ExpressRouter = Router();
 
 v1Router.use(requireTenantScope);
 
