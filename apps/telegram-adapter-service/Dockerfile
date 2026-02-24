@@ -2,6 +2,7 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+COPY tsconfig.base.json /tsconfig.base.json
 COPY apps/telegram-adapter-service/package*.json ./
 RUN npm install
 
