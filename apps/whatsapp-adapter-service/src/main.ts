@@ -30,7 +30,7 @@ type SocketLike = {
   sendMessage: (jid: string, payload: { text: string }) => Promise<unknown>;
 };
 
-type OrchestratorMessageOut = { text?: string };
+type OrchestratorMessageOut = { text?: string; payload?: Record<string, unknown> };
 type OrchestratorPayload = {
   responses?: OrchestratorMessageOut[];
   replyText?: string;
@@ -68,19 +68,127 @@ const QUICK_FLOW_PREFIXES = [
   'opción ',
 ];
 
+const APPOINTMENT_CONTROL_PHRASES = [
+  'agendar cita',
+  'agendar una cita',
+  'deseo agendar una cita',
+  'cancelar cita',
+  'reprogramar cita',
+];
+
+const APPOINTMENT_PROMPT_HINTS = [
+  'escribe tu nombre completo',
+  'tipo de documento',
+  'numero de documento',
+  'número de documento',
+  'correo electronico',
+  'correo electrónico',
+  'numero de celular',
+  'número de celular',
+  'modalidad',
+  'dia de la cita',
+  'día de la cita',
+  'hora de la cita',
+  'confirmar cita',
+  'cambiar modalidad',
+  'cambiar dia',
+  'cambiar día',
+  'cambiar hora',
+];
+
+const APPOINTMENT_DONE_HINTS = [
+  'cita agendada',
+  'cita cancelada',
+  'cita reprogramada',
+  'tu cita fue',
+  'tu cita ha sido',
+  'consulta finalizada',
+];
+
+const APPOINTMENT_FLOW_TERMINAL_HINTS = [
+  'scheduled',
+  'declined',
+  'cancel_done',
+  'cancelled',
+  'reschedule_done',
+  'completed',
+  'closed',
+];
+
+type AppointmentFlowState = { inFlow: boolean; updatedAt: number };
+const appointmentFlowByUser = new Map<string, AppointmentFlowState>();
+const APPOINTMENT_FLOW_TTL_MS = 45 * 60 * 1000;
+
 function normalizeInputText(text: string): string {
   return text
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[*_`~]/g, '')
     .toLowerCase()
     .trim();
 }
 
-function shouldSendAnalyzingNotice(text: string): boolean {
+function isExitOrResetCommand(normalized: string): boolean {
+  return normalized === 'salir' || normalized === 'reset';
+}
+
+function isAppointmentControlMessage(normalized: string): boolean {
+  if (APPOINTMENT_CONTROL_PHRASES.some((phrase) => normalized.includes(phrase))) return true;
+  if (normalized === 'si deseo agendar una cita' || normalized === 'si, deseo agendar una cita') return true;
+  return false;
+}
+
+function getAppointmentFlowState(userKey: string): AppointmentFlowState {
+  const now = Date.now();
+  for (const [key, state] of appointmentFlowByUser.entries()) {
+    if (now - state.updatedAt > APPOINTMENT_FLOW_TTL_MS) appointmentFlowByUser.delete(key);
+  }
+
+  const current = appointmentFlowByUser.get(userKey);
+  if (!current) return { inFlow: false, updatedAt: now };
+  return current;
+}
+
+function setAppointmentFlowState(userKey: string, inFlow: boolean): void {
+  if (!inFlow) {
+    appointmentFlowByUser.delete(userKey);
+    return;
+  }
+  appointmentFlowByUser.set(userKey, { inFlow: true, updatedAt: Date.now() });
+}
+
+function hasAnyHint(text: string, hints: string[]): boolean {
+  return hints.some((hint) => text.includes(hint));
+}
+
+function detectFlowUpdate(payload: OrchestratorPayload, replyText: string): boolean | null {
+  const responsePayload = Array.isArray(payload.responses)
+    ? payload.responses.find((item) => item && typeof item.payload === 'object')?.payload
+    : undefined;
+
+  const appointmentFlow = typeof responsePayload?.appointmentFlow === 'string'
+    ? normalizeInputText(String(responsePayload.appointmentFlow))
+    : '';
+
+  if (appointmentFlow) {
+    const isTerminal = APPOINTMENT_FLOW_TERMINAL_HINTS.some((hint) => appointmentFlow.includes(hint));
+    return !isTerminal;
+  }
+
+  const normalizedReply = normalizeInputText(replyText);
+  if (hasAnyHint(normalizedReply, APPOINTMENT_DONE_HINTS)) return false;
+  if (hasAnyHint(normalizedReply, APPOINTMENT_PROMPT_HINTS)) return true;
+  return null;
+}
+
+function shouldSendAnalyzingNotice(text: string, inAppointmentFlow: boolean): boolean {
   const normalized = normalizeInputText(text);
   if (!normalized) return false;
+  if (inAppointmentFlow) return false;
   if (normalized.startsWith('/')) return false;
   if (/^\d+$/.test(normalized)) return false;
+  if (isExitOrResetCommand(normalized)) return false;
+  if (isAppointmentControlMessage(normalized)) return false;
   if (QUICK_FLOW_EXACT_MATCH.has(normalized)) return false;
   if (QUICK_FLOW_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false;
   return true;
@@ -244,10 +352,17 @@ async function onIncomingMessage(msg: any): Promise<void> {
   const text = extractIncomingText(msg);
   if (!telefono || !text) return;
 
+  const userKey = `whatsapp:${telefono}`;
+  const normalizedText = normalizeInputText(text);
+  if (isExitOrResetCommand(normalizedText)) {
+    setAppointmentFlowState(userKey, false);
+  }
+
   const correlationId = `${telefono}-${providerMessageId}-${randomUUID()}`;
 
   try {
-    if (shouldSendAnalyzingNotice(text)) {
+    const flowState = getAppointmentFlowState(userKey);
+    if (shouldSendAnalyzingNotice(text, flowState.inFlow)) {
       await socket.sendMessage(remoteJid, { text: ANALYZING_TEXT });
     }
 
@@ -260,6 +375,11 @@ async function onIncomingMessage(msg: any): Promise<void> {
     });
 
     const reply = extractReplyText(orchestrator);
+    const flowUpdate = detectFlowUpdate(orchestrator, reply);
+    if (flowUpdate !== null) {
+      setAppointmentFlowState(userKey, flowUpdate);
+    }
+
     await socket.sendMessage(remoteJid, { text: reply });
   } catch (err) {
     const msgError = err instanceof Error ? err.message : String(err);
