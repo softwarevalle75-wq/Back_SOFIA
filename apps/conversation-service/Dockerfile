@@ -13,6 +13,8 @@ RUN pnpm --filter @sofia/shared-kernel run build \
  && pnpm --filter @sofia/observability run build
 RUN pnpm --filter conversation-service run prisma:generate
 RUN pnpm --filter conversation-service run build
+RUN mkdir -p /app/apps/conversation-service/dist/generated \
+ && cp -R /app/apps/conversation-service/src/generated/prisma /app/apps/conversation-service/dist/generated/prisma
 
 EXPOSE 3010
 CMD ["pnpm", "--filter", "conversation-service", "start"]
