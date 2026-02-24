@@ -369,8 +369,8 @@ function pickHour24(text: string): number | undefined {
 
 function isHourAllowedByMode(mode: 'virtual' | 'presencial', hour24: number): boolean {
   const allowed = mode === 'virtual'
-    ? [9, 10, 11, 12, 14, 15, 16, 17, 18]
-    : [8, 9, 10, 11, 14, 15, 16];
+    ? [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    : [13, 14, 15, 16, 17];
   return allowed.includes(hour24);
 }
 
@@ -382,8 +382,8 @@ function formatHour(hour24: number): string {
 }
 
 function appointmentHourHint(mode: 'virtual' | 'presencial'): string {
-  if (mode === 'virtual') return 'Horario virtual disponible: 9:00, 10:00, 11:00, 12:00, 14:00, 15:00, 16:00, 17:00 y 18:00.';
-  return 'Horario presencial disponible: 8:00, 9:00, 10:00, 11:00, 14:00, 15:00 y 16:00.';
+  if (mode === 'virtual') return 'Horario virtual disponible: 8:00, 9:00, 10:00, 11:00, 12:00, 13:00, 14:00, 15:00, 16:00 y 17:00.';
+  return 'Horario presencial disponible: 13:00, 14:00, 15:00, 16:00 y 17:00.';
 }
 
 function buildAvailableHoursText(mode: 'virtual' | 'presencial', hours24: number[]): string {
