@@ -1,0 +1,6 @@
+packages:
+  - "packages/*"
+  - "!packages/prisma"
+  - "apps/*"
+  # ms-ia-orquestacion es Python/FastAPI, no participa del workspace Node
+  - "!apps/ms-ia-orquestacion"
