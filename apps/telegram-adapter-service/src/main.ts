@@ -44,6 +44,8 @@ type TelegramUpdate = {
   };
 };
 
+const ANALYZING_TEXT = 'Estamos analizando tu consulta, ya te respondemos.';
+
 const processedUpdateIds = new Set<number>();
 let polling = false;
 let lastError: string | null = null;
@@ -167,6 +169,12 @@ async function processUpdate(update: TelegramUpdate): Promise<void> {
   });
 
   try {
+    await callTelegram('sendMessage', {
+      chat_id: message.chat.id,
+      text: ANALYZING_TEXT,
+      disable_web_page_preview: true,
+    });
+
     const orchestratorRes = await callOrchestrator({
       from,
       displayName: formatDisplayName(update),

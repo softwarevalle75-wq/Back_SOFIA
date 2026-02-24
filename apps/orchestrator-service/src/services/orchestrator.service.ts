@@ -95,7 +95,7 @@ const PRELIMINARY_GUIDANCE_DISCLAIMER =
   'Recuerda: esta orientación es preliminar y no reemplaza la atención presencial del Consultorio Jurídico.';
 
 const ORIENTATION_DETAIL_PROMPT =
-  'Si deseas una orientación más específica, puedes enviarme información adicional como:\n📅 Fechas importantes\n📄 Documentos relacionados\n👤 Actuaciones de la otra parte\n\nEntre más detalles me compartas, mejor podré orientarte.';
+  'Si deseas una orientación más específica, puedes enviarme información adicional en texto como:\n📅 Fechas importantes\n🧾 Qué ocurrió exactamente\n👥 Quiénes están involucrados\n🎯 Qué resultado esperas\n\nEntre más detalles me compartas, mejor podré orientarte.';
 
 const MENU_TEXT = `👋 ¡Bienvenido/a!\n\nSoy SOF-IA 🤖, tu asistente virtual del Consultorio Jurídico.\n\nPuedo orientarte de manera preliminar en temas como:\n\n⚖️ Laboral\n⚖️ Penal\n⚖️ Civil\n⚖️ Familia\n⚖️ Constitucional\n⚖️ Administrativo\n⚖️ Conciliación\n⚖️ Tránsito\n\nCuéntame con tranquilidad tu caso o tu duda, y te acompañaré paso a paso 🤝`;
 
@@ -2357,7 +2357,31 @@ ${SURVEY_RATING_TEXT}`,
     if (input.rawText.trim().length > 0) {
       const baseProfile = state.profile ?? {};
       const initialQuery = input.rawText.trim();
-      const pendingCaseType = typeof baseProfile.pendingCaseType === 'string' ? baseProfile.pendingCaseType : undefined;
+      const inferredInitialCaseType = inferCaseTypeFromText(initialQuery);
+
+      if (!hasLaborEvidence(initialQuery) && !inferredInitialCaseType) {
+        return {
+          responseText: 'Para orientarte mejor, indícame primero el tipo de caso (laboral, familia, penal, civil, etc.) y un breve resumen en texto de lo ocurrido.',
+          patch: {
+            intent: 'general',
+            step: 'ask_intent',
+            profile: {
+              ...baseProfile,
+              pendingClarification: initialQuery,
+            },
+          },
+          payload: {
+            orchestrator: true,
+            correlationId: input.correlationId,
+            flow: 'stateful',
+            category: 'indeterminado',
+          },
+        };
+      }
+
+      const pendingCaseType = typeof baseProfile.pendingCaseType === 'string'
+        ? baseProfile.pendingCaseType
+        : inferredInitialCaseType;
 
       const rag = await resolveLaboralQuery({
         queryText: initialQuery,
@@ -3102,6 +3126,14 @@ function inferCaseTypeFromText(text: string): string | undefined {
         'agresion sexual',
         'acoso sexual',
         'violencia sexual',
+        'violencia intrafamiliar',
+        'me golpe',
+        'golpearon',
+        'maltrat',
+        'amenaz',
+        'extorsion',
+        'costillas rotas',
+        'lesion',
         'denunciar',
       ],
     },
@@ -3137,11 +3169,35 @@ function inferCaseTypeFromText(text: string): string | undefined {
   return undefined;
 }
 
-function inferCaseTypeLabel(query: string, answer: string): string | undefined {
+function inferCaseTypeLabel(query: string, _answer: string): string | undefined {
   if (isBotInfoQuery(query)) return undefined;
   const fromQuery = inferCaseTypeFromText(query);
   if (fromQuery) return fromQuery;
-  return inferCaseTypeFromText(answer);
+  return undefined;
+}
+
+function hasLaborEvidence(text: string): boolean {
+  const normalized = normalizeForMatch(text);
+  return [
+    'trabajo',
+    'laboral',
+    'empleo',
+    'empleador',
+    'despido',
+    'renuncia',
+    'liquidacion',
+    'liquidación',
+    'prestaciones',
+    'contrato de trabajo',
+    'salario',
+    'nomina',
+    'nómina',
+    'horas extra',
+    'incapacidad laboral',
+    'acoso laboral',
+    'arl',
+    'eps',
+  ].some((term) => normalized.includes(term));
 }
 
 function shouldUseQuickOrientation(query: string, caseType?: string): boolean {

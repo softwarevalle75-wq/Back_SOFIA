@@ -38,6 +38,8 @@ type OrchestratorPayload = {
   response?: string;
 };
 
+const ANALYZING_TEXT = 'Estamos analizando tu consulta, ya te respondemos.';
+
 let socket: SocketLike | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let pairingTimer: NodeJS.Timeout | null = null;
@@ -199,6 +201,8 @@ async function onIncomingMessage(msg: any): Promise<void> {
   const correlationId = `${telefono}-${providerMessageId}-${randomUUID()}`;
 
   try {
+    await socket.sendMessage(remoteJid, { text: ANALYZING_TEXT });
+
     const orchestrator = await callOrchestrator({
       telefono,
       body: text,
