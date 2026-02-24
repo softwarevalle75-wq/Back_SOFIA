@@ -368,8 +368,10 @@ function pickHour24(text: string): number | undefined {
 }
 
 function isHourAllowedByMode(mode: 'virtual' | 'presencial', hour24: number): boolean {
-  if (mode === 'virtual') return hour24 >= 8 && hour24 <= 17;
-  return hour24 >= 13 && hour24 <= 17;
+  const allowed = mode === 'virtual'
+    ? [9, 10, 11, 12, 14, 15, 16, 17, 18]
+    : [8, 9, 10, 11, 14, 15, 16];
+  return allowed.includes(hour24);
 }
 
 function formatHour(hour24: number): string {
@@ -380,10 +382,20 @@ function formatHour(hour24: number): string {
 }
 
 function appointmentHourHint(mode: 'virtual' | 'presencial'): string {
-  if (mode === 'virtual') {
-    return 'Horario virtual disponible: lunes a viernes de 8:00 AM a 5:00 PM.';
+  if (mode === 'virtual') return 'Horario virtual disponible: 9:00, 10:00, 11:00, 12:00, 14:00, 15:00, 16:00, 17:00 y 18:00.';
+  return 'Horario presencial disponible: 8:00, 9:00, 10:00, 11:00, 14:00, 15:00 y 16:00.';
+}
+
+function buildAvailableHoursText(mode: 'virtual' | 'presencial', hours24: number[]): string {
+  if (hours24.length === 0) {
+    return `No hay horas disponibles para ${mode} ese día.`;
   }
-  return 'Horario presencial disponible: lunes a viernes de 1:00 PM a 5:00 PM.';
+  const formatted = hours24
+    .slice()
+    .sort((a, b) => a - b)
+    .map((hour) => formatHour(hour))
+    .join(', ');
+  return `Horas disponibles para ${mode}: ${formatted}.`;
 }
 
 function formatWeekday(day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes'): string {
@@ -691,6 +703,9 @@ Y si prefieres terminar la conversación, escribe *salir*.`;
 type StoredAppointment = AppointmentScheduleData & {
   status: 'agendada' | 'cancelada';
   updatedAt: string;
+  citaId?: string;
+  assignedStudentName?: string;
+  assignedStudentEmail?: string;
   user?: Record<string, unknown>;
 };
 
@@ -705,8 +720,11 @@ function toStoredAppointment(value: unknown): StoredAppointment | undefined {
   const statusRaw = String(data.status ?? 'agendada').toLowerCase();
   const status = statusRaw === 'cancelada' ? 'cancelada' : 'agendada';
   const updatedAt = typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString();
+  const citaId = typeof data.citaId === 'string' ? data.citaId : undefined;
+  const assignedStudentName = typeof data.assignedStudentName === 'string' ? data.assignedStudentName : undefined;
+  const assignedStudentEmail = typeof data.assignedStudentEmail === 'string' ? data.assignedStudentEmail : undefined;
   const user = typeof data.user === 'object' && data.user !== null ? data.user as Record<string, unknown> : undefined;
-  return { mode, day, hour24, status, updatedAt, user };
+  return { mode, day, hour24, status, updatedAt, citaId, assignedStudentName, assignedStudentEmail, user };
 }
 
 function getStoredAppointments(profile: Record<string, unknown>): StoredAppointment[] {
@@ -769,7 +787,8 @@ function hydrateAppointmentsFromContext(
         && item.day === other.day
         && item.hour24 === other.hour24
         && item.mode === other.mode
-        && item.status === other.status;
+        && item.status === other.status
+        && item.citaId === other.citaId;
     });
     if (unchanged) return profile;
   }
@@ -811,71 +830,176 @@ function buildAppointmentListText(appointments: StoredAppointment[]): string {
   return `Estas son tus citas registradas:\n${lines.join('\n')}`;
 }
 
-async function createAdminAppointmentNotification(input: {
-  tenantId: string;
-  correlationId: string;
-  title: string;
-  message: string;
-  eventType: 'agendamiento' | 'cancelacion' | 'reprogramacion';
-  priority: 'low' | 'medium' | 'high';
-  appointment?: {
-    userName?: string;
-    userEmail?: string;
-    userPhone?: string;
-    userDocumentType?: string;
-    userDocumentNumber?: string;
-    day?: string;
-    hour24?: number;
-    mode?: 'presencial' | 'virtual';
+type ChatbotAvailabilityResult = {
+  day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
+  mode: 'virtual' | 'presencial';
+  hours24: number[];
+};
+
+type ChatbotScheduleResult = {
+  citaId: string;
+  day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
+  mode: 'virtual' | 'presencial';
+  hour24: number;
+  studentName?: string;
+  studentEmail?: string;
+};
+
+function internalAuthHeaders(correlationId: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Request-Id': correlationId,
   };
-}) {
+  if (env.CHATBOT_INTERNAL_TOKEN) {
+    headers['X-Internal-Token'] = env.CHATBOT_INTERNAL_TOKEN;
+  }
+  return headers;
+}
+
+async function fetchChatbotAvailability(input: {
+  correlationId: string;
+  day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
+  mode: 'virtual' | 'presencial';
+}): Promise<ChatbotAvailabilityResult | null> {
   try {
-    const authResponse = await fetch(`${env.AUTH_SERVICE_URL}/api/notificaciones/chatbot-cita-evento`, {
+    const search = new URLSearchParams({ day: input.day, mode: input.mode }).toString();
+    const response = await fetch(`${env.AUTH_SERVICE_URL}/api/citas/chatbot/disponibilidad?${search}`, {
+      method: 'GET',
+      headers: internalAuthHeaders(input.correlationId),
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      log.warn({ correlationId: input.correlationId, day: input.day, mode: input.mode, status: response.status, body: bodyText }, 'No se pudo obtener disponibilidad real de citas');
+      return null;
+    }
+
+    const parsed = JSON.parse(bodyText) as any;
+    const hoursRaw = Array.isArray(parsed?.data?.horasDisponibles) ? parsed.data.horasDisponibles : [];
+    const hours24 = hoursRaw
+      .map((value: unknown) => {
+        const match = /^(\d{1,2}):(\d{2})$/.exec(String(value));
+        if (!match) return undefined;
+        return Number.parseInt(match[1], 10);
+      })
+      .filter((value: number | undefined): value is number => typeof value === 'number' && Number.isFinite(value));
+
+    return {
+      day: input.day,
+      mode: input.mode,
+      hours24,
+    };
+  } catch (error) {
+    log.warn({ correlationId: input.correlationId, error: error instanceof Error ? error.message : String(error) }, 'Error consultando disponibilidad de citas en auth-service');
+    return null;
+  }
+}
+
+async function scheduleChatbotAppointmentInAuth(input: {
+  correlationId: string;
+  day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
+  mode: 'virtual' | 'presencial';
+  hour24: number;
+  userData: AppointmentUserData;
+  reason?: string;
+}): Promise<ChatbotScheduleResult | null> {
+  try {
+    const response = await fetch(`${env.AUTH_SERVICE_URL}/api/citas/chatbot/agendar`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Request-Id': input.correlationId,
-      },
+      headers: internalAuthHeaders(input.correlationId),
       body: JSON.stringify({
-        tenantId: input.tenantId,
-        tipoEvento: input.eventType,
-        titulo: input.title,
-        mensaje: input.message,
-        prioridad: input.priority,
-        appointment: input.appointment,
+        day: input.day,
+        mode: input.mode,
+        hour24: input.hour24,
+        motivo: input.reason,
+        userName: input.userData.fullName,
+        userDocumentType: input.userData.documentType,
+        userDocumentNumber: input.userData.documentNumber,
+        userEmail: input.userData.email,
+        userPhone: input.userData.phone,
       }),
     });
 
-    if (authResponse.ok) return;
+    const bodyText = await response.text();
+    if (!response.ok) {
+      log.warn({ correlationId: input.correlationId, status: response.status, body: bodyText }, 'No se pudo agendar cita real en auth-service');
+      return null;
+    }
 
-    const authBody = await authResponse.text();
-    log.warn(
-      {
-        correlationId: input.correlationId,
-        tenantId: input.tenantId,
-        status: authResponse.status,
-        body: authBody,
-      },
-      'Auth-service no pudo enviar correo/notificación; usando fallback local',
-    );
+    const parsed = JSON.parse(bodyText) as any;
+    const citaId = String(parsed?.data?.citaId || '').trim();
+    const mode = parsed?.data?.mode === 'presencial' ? 'presencial' : 'virtual';
+    const day = pickWeekday(String(parsed?.data?.day || input.day)) || input.day;
+    const hour24 = typeof parsed?.data?.hour24 === 'number' ? parsed.data.hour24 : input.hour24;
 
-    await conversationClient.createNotification({
-      tenantId: input.tenantId,
-      requestId: input.correlationId,
-      tipo: 'cita',
-      titulo: input.title,
-      mensaje: input.message,
-      prioridad: input.priority,
-    });
+    if (!citaId) return null;
+
+    return {
+      citaId,
+      day,
+      mode,
+      hour24,
+      studentName: typeof parsed?.data?.estudianteNombre === 'string' ? parsed.data.estudianteNombre : undefined,
+      studentEmail: typeof parsed?.data?.estudianteCorreo === 'string' ? parsed.data.estudianteCorreo : undefined,
+    };
   } catch (error) {
-    log.warn(
-      {
-        correlationId: input.correlationId,
-        tenantId: input.tenantId,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      'No se pudo crear notificación de cita para admin',
-    );
+    log.warn({ correlationId: input.correlationId, error: error instanceof Error ? error.message : String(error) }, 'Error agendando cita real en auth-service');
+    return null;
+  }
+}
+
+async function cancelChatbotAppointmentInAuth(input: {
+  correlationId: string;
+  citaId: string;
+}): Promise<boolean> {
+  try {
+    const response = await fetch(`${env.AUTH_SERVICE_URL}/api/citas/chatbot/cancelar`, {
+      method: 'POST',
+      headers: internalAuthHeaders(input.correlationId),
+      body: JSON.stringify({ citaId: input.citaId }),
+    });
+
+    if (response.ok) return true;
+    const body = await response.text();
+    log.warn({ correlationId: input.correlationId, citaId: input.citaId, status: response.status, body }, 'No se pudo cancelar cita real en auth-service');
+    return false;
+  } catch (error) {
+    log.warn({ correlationId: input.correlationId, citaId: input.citaId, error: error instanceof Error ? error.message : String(error) }, 'Error cancelando cita real en auth-service');
+    return false;
+  }
+}
+
+async function rescheduleChatbotAppointmentInAuth(input: {
+  correlationId: string;
+  citaId: string;
+  day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
+  hour24: number;
+}): Promise<Pick<ChatbotScheduleResult, 'day' | 'hour24' | 'mode'> | null> {
+  try {
+    const response = await fetch(`${env.AUTH_SERVICE_URL}/api/citas/chatbot/reprogramar`, {
+      method: 'POST',
+      headers: internalAuthHeaders(input.correlationId),
+      body: JSON.stringify({
+        citaId: input.citaId,
+        day: input.day,
+        hour24: input.hour24,
+      }),
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      log.warn({ correlationId: input.correlationId, citaId: input.citaId, status: response.status, body: bodyText }, 'No se pudo reprogramar cita real en auth-service');
+      return null;
+    }
+
+    const parsed = JSON.parse(bodyText) as any;
+    const day = pickWeekday(String(parsed?.data?.day || input.day)) || input.day;
+    const hour24 = typeof parsed?.data?.hour24 === 'number' ? parsed.data.hour24 : input.hour24;
+    const mode = parsed?.data?.mode === 'presencial' ? 'presencial' : 'virtual';
+    return { day, hour24, mode };
+  } catch (error) {
+    log.warn({ correlationId: input.correlationId, citaId: input.citaId, error: error instanceof Error ? error.message : String(error) }, 'Error reprogramando cita real en auth-service');
+    return null;
   }
 }
 
@@ -1805,15 +1929,43 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       },
     };
 
+    const availability = await fetchChatbotAvailability({
+      correlationId: input.correlationId,
+      day,
+      mode,
+    });
+
+    const availableHours = availability?.hours24 ?? [];
+    const nextProfileWithAvailability = {
+      ...nextProfile,
+      appointmentAvailableHours: availableHours,
+    };
+
+    if (availability && availableHours.length === 0) {
+      conversationStore.set(key, {
+        stage: 'awaiting_appointment_day',
+        category: 'laboral',
+        profile: nextProfileWithAvailability,
+      });
+
+      return {
+        responseText: `No hay espacios disponibles para ${formatWeekday(day)} en modalidad ${mode}. Indica otro día entre lunes y viernes.`,
+        patch: { intent: 'consulta_laboral', step: 'ask_appointment_day', profile: nextProfileWithAvailability },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'day_no_slots' },
+      };
+    }
+
     conversationStore.set(key, {
       stage: 'awaiting_appointment_time',
       category: 'laboral',
-      profile: nextProfile,
+      profile: nextProfileWithAvailability,
     });
 
     return {
-      responseText: `${appointmentHourHint(mode)} Indica la hora de tu cita.`,
-      patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile: nextProfile },
+      responseText: availability
+        ? `${buildAvailableHoursText(mode, availableHours)} Indica la hora de tu cita.`
+        : `${appointmentHourHint(mode)} Indica la hora de tu cita.`,
+      patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile: nextProfileWithAvailability },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time' },
     };
   }
@@ -1874,11 +2026,60 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       };
     }
 
+    const availability = await fetchChatbotAvailability({
+      correlationId: input.correlationId,
+      day,
+      mode,
+    });
+    const availableHours = availability?.hours24 ?? [];
+    const hasAvailabilityData = availability !== null;
+    const selectedIndexForEdit = typeof profile.rescheduleSelectedIndex === 'number'
+      ? profile.rescheduleSelectedIndex
+      : -1;
+    const editCandidates = Array.isArray(profile.rescheduleCandidates)
+      ? profile.rescheduleCandidates
+        .map((item) => toStoredAppointment(item))
+        .filter((item): item is StoredAppointment => Boolean(item))
+      : [];
+    const selectedForEdit = selectedIndexForEdit >= 0 ? editCandidates[selectedIndexForEdit] : undefined;
+    const isSameSlotAsCurrentEdit = Boolean(
+      isEditOnly
+      && selectedForEdit
+      && selectedForEdit.citaId
+      && selectedForEdit.day === day
+      && selectedForEdit.mode === mode
+      && selectedForEdit.hour24 === hour24,
+    );
+
     if (!isHourAllowedByMode(mode, hour24)) {
       return {
-        responseText: `La hora no está disponible para modalidad ${mode}. ${appointmentHourHint(mode)}`,
-        patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile },
+        responseText: hasAvailabilityData
+          ? `La hora no está disponible para modalidad ${mode}. ${buildAvailableHoursText(mode, availableHours)}`
+          : `La hora no está disponible para modalidad ${mode}. ${appointmentHourHint(mode)}`,
+        patch: {
+          intent: 'consulta_laboral',
+          step: 'ask_appointment_time',
+          profile: {
+            ...profile,
+            appointmentAvailableHours: availableHours,
+          },
+        },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time_out_of_range' },
+      };
+    }
+
+    if (hasAvailabilityData && !availableHours.includes(hour24) && !isSameSlotAsCurrentEdit) {
+      return {
+        responseText: `Ese horario ya fue ocupado. ${buildAvailableHoursText(mode, availableHours)} Indica otra hora.`,
+        patch: {
+          intent: 'consulta_laboral',
+          step: 'ask_appointment_time',
+          profile: {
+            ...profile,
+            appointmentAvailableHours: availableHours,
+          },
+        },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time_taken' },
       };
     }
 
@@ -1890,6 +2091,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         day,
         hour24,
       },
+      appointmentAvailableHours: availableHours,
     };
 
     conversationStore.set(key, {
@@ -2121,7 +2323,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         };
       }
 
-      const appointmentRecord: StoredAppointment = {
+      const appointmentRecordBase: StoredAppointment = {
         mode,
         day,
         hour24,
@@ -2141,18 +2343,56 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
           ? currentList[selectedIndex]
           : undefined;
 
+        let updatedRecord: StoredAppointment = appointmentRecordBase;
+        if (previous?.citaId) {
+          const reprogrammed = await rescheduleChatbotAppointmentInAuth({
+            correlationId: input.correlationId,
+            citaId: previous.citaId,
+            day,
+            hour24,
+          });
+
+          if (!reprogrammed) {
+            const availability = await fetchChatbotAvailability({ correlationId: input.correlationId, day, mode });
+            const availableHours = availability?.hours24 ?? [];
+            return {
+              responseText: `No fue posible reprogramar en ese horario porque ya se ocupó. ${buildAvailableHoursText(mode, availableHours)} Indica otra hora.`,
+              patch: {
+                intent: 'consulta_laboral',
+                step: 'ask_appointment_time',
+                profile: {
+                  ...profile,
+                  appointmentAvailableHours: availableHours,
+                },
+              },
+              payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'reschedule_slot_taken' },
+            };
+          }
+
+          updatedRecord = {
+            ...updatedRecord,
+            citaId: previous.citaId,
+            mode: reprogrammed.mode,
+            day: reprogrammed.day,
+            hour24: reprogrammed.hour24,
+            assignedStudentName: previous.assignedStudentName,
+            assignedStudentEmail: previous.assignedStudentEmail,
+          };
+        }
+
         if (selectedIndex >= 0 && selectedIndex < currentList.length) {
           currentList[selectedIndex] = {
             ...currentList[selectedIndex],
-            ...appointmentRecord,
+            ...updatedRecord,
           };
         } else {
-          currentList.unshift(appointmentRecord);
+          currentList.unshift(updatedRecord);
         }
 
         const nextProfile = saveStoredAppointments({
           ...profile,
           appointment: undefined,
+          appointmentAvailableHours: undefined,
           appointmentEditOnly: undefined,
           rescheduleCandidates: undefined,
           rescheduleSelectedIndex: undefined,
@@ -2164,47 +2404,55 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
           profile: nextProfile,
         });
 
-        const actorName = pickString((appointmentRecord.user as Record<string, unknown> | undefined)?.fullName)
-          ?? input.messageIn.displayName
-          ?? input.messageIn.externalUserId;
-
-        const previousLabel = previous
-          ? `${formatWeekday(previous.day)} ${formatHour(previous.hour24)} (${previous.mode})`
-          : 'sin dato previo';
-
-        const nextLabel = `${formatWeekday(day)} ${formatHour(hour24)} (${mode})`;
-
-        await createAdminAppointmentNotification({
-          tenantId: input.messageIn.tenantId,
-          correlationId: input.correlationId,
-          title: 'Cita reprogramada desde chat',
-          message: `${actorName} reprogramó su cita por chat. Antes: ${previousLabel}. Ahora: ${nextLabel}.`,
-          eventType: 'reprogramacion',
-          priority: 'medium',
-          appointment: {
-            userName: actorName,
-            userEmail: pickString((appointmentRecord.user as Record<string, unknown> | undefined)?.email),
-            userPhone: pickString((appointmentRecord.user as Record<string, unknown> | undefined)?.phone),
-            userDocumentType: pickString((appointmentRecord.user as Record<string, unknown> | undefined)?.documentType),
-            userDocumentNumber: pickString((appointmentRecord.user as Record<string, unknown> | undefined)?.documentNumber),
-            day,
-            hour24,
-            mode,
-          },
-        });
-
         return {
-          responseText: `✅ Tu cita fue reprogramada con éxito.\n\n📅 ${formatWeekday(day)}\n⏰ ${formatHour(hour24)}\n📍 Modalidad ${mode}\n\n${FOLLOWUP_HINT_TEXT}`,
+          responseText: `✅ Tu cita fue reprogramada con éxito.\n\n📅 ${formatWeekday(updatedRecord.day)}\n⏰ ${formatHour(updatedRecord.hour24)}\n📍 Modalidad ${updatedRecord.mode}\n\n${FOLLOWUP_HINT_TEXT}`,
           patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
           payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'rescheduled' },
         };
       }
 
-      const nextProfile = saveStoredAppointments(profile, {
-        ...appointmentRecord,
-        user: userData as unknown as Record<string, unknown>,
-      });
       const confirmedUserData = userData as AppointmentUserData;
+      const scheduled = await scheduleChatbotAppointmentInAuth({
+        correlationId: input.correlationId,
+        day,
+        mode,
+        hour24,
+        userData: confirmedUserData,
+        reason: 'Cita agendada desde chatbot',
+      });
+
+      if (!scheduled) {
+        const availability = await fetchChatbotAvailability({ correlationId: input.correlationId, day, mode });
+        const availableHours = availability?.hours24 ?? [];
+        return {
+          responseText: `No fue posible agendar en ese horario porque ya se ocupó. ${buildAvailableHoursText(mode, availableHours)} Indica otra hora.`,
+          patch: {
+            intent: 'consulta_laboral',
+            step: 'ask_appointment_time',
+            profile: {
+              ...profile,
+              appointmentAvailableHours: availableHours,
+            },
+          },
+          payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'schedule_slot_taken' },
+        };
+      }
+
+      const scheduledRecord: StoredAppointment = {
+        ...appointmentRecordBase,
+        mode: scheduled.mode,
+        day: scheduled.day,
+        hour24: scheduled.hour24,
+        citaId: scheduled.citaId,
+        assignedStudentName: scheduled.studentName,
+        assignedStudentEmail: scheduled.studentEmail,
+        user: confirmedUserData as unknown as Record<string, unknown>,
+      };
+
+      const nextProfile = saveStoredAppointments({
+        ...profile,
+        appointmentAvailableHours: undefined,
+      }, scheduledRecord);
 
       conversationStore.set(key, {
         stage: 'awaiting_survey_rating',
@@ -2212,31 +2460,14 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         profile: nextProfile,
       });
 
-      await createAdminAppointmentNotification({
-        tenantId: input.messageIn.tenantId,
-        correlationId: input.correlationId,
-        title: 'Cita agendada desde chat',
-        message: `${confirmedUserData.fullName} agendó una cita por chat para ${formatWeekday(day)} ${formatHour(hour24)} (${mode}).`,
-        eventType: 'agendamiento',
-        priority: 'medium',
-        appointment: {
-          userName: confirmedUserData.fullName,
-          userEmail: confirmedUserData.email,
-          userPhone: confirmedUserData.phone,
-          userDocumentType: confirmedUserData.documentType,
-          userDocumentNumber: confirmedUserData.documentNumber,
-          day,
-          hour24,
-          mode,
-        },
-      });
-
       return {
         responseText: `${buildAppointmentScheduledFriendlyText({
-          mode,
-          day,
-          hour24,
+          mode: scheduled.mode,
+          day: scheduled.day,
+          hour24: scheduled.hour24,
         })}
+
+${scheduled.studentName ? `\n👩‍⚖️ Tu cita fue asignada a: *${scheduled.studentName}*.` : ''}
 
 ${SURVEY_RATING_TEXT}`,
         patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
@@ -2595,6 +2826,22 @@ ${SURVEY_RATING_TEXT}`,
 
     const currentList = getStoredAppointments(profile);
     const chosen = currentList[selectedIndex] ?? candidates[selectedIndex];
+
+    if (chosen.citaId) {
+      const cancelled = await cancelChatbotAppointmentInAuth({
+        correlationId: input.correlationId,
+        citaId: chosen.citaId,
+      });
+
+      if (!cancelled) {
+        return {
+          responseText: 'No fue posible cancelar esa cita en este momento. Intenta nuevamente en unos segundos.',
+          patch: { intent: 'consulta_laboral', step: 'confirm_appointment', profile },
+          payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'cancel_failed' },
+        };
+      }
+    }
+
     const updated: StoredAppointment = {
       ...chosen,
       status: 'cancelada',
@@ -2616,29 +2863,6 @@ ${SURVEY_RATING_TEXT}`,
       stage: 'awaiting_question',
       category: 'laboral',
       profile: nextProfile,
-    });
-
-    const actorName = pickString((updated.user as Record<string, unknown> | undefined)?.fullName)
-      ?? input.messageIn.displayName
-      ?? input.messageIn.externalUserId;
-
-    await createAdminAppointmentNotification({
-      tenantId: input.messageIn.tenantId,
-      correlationId: input.correlationId,
-      title: 'Cita cancelada desde chat',
-      message: `${actorName} canceló su cita por chat para ${formatWeekday(updated.day)} ${formatHour(updated.hour24)} (${updated.mode}).`,
-      eventType: 'cancelacion',
-      priority: 'high',
-      appointment: {
-        userName: actorName,
-        userEmail: pickString((updated.user as Record<string, unknown> | undefined)?.email),
-        userPhone: pickString((updated.user as Record<string, unknown> | undefined)?.phone),
-        userDocumentType: pickString((updated.user as Record<string, unknown> | undefined)?.documentType),
-        userDocumentNumber: pickString((updated.user as Record<string, unknown> | undefined)?.documentNumber),
-        day: updated.day,
-        hour24: updated.hour24,
-        mode: updated.mode,
-      },
     });
 
     return {

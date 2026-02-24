@@ -19,6 +19,7 @@ const EnvSchema = z.object({
   ORCH_RAG_BASE_URL: z.string().url().default('http://127.0.0.1:3040'),
   ORCH_RAG_ENDPOINT: z.string().default('/v1/ai/rag-answer'),
   ORCH_RAG_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
+  CHATBOT_INTERNAL_TOKEN: z.string().optional(),
 });
 
 export const env = validateEnv(EnvSchema);
