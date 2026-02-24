@@ -873,17 +873,20 @@ type ChatbotRescheduleOutcome =
   | { status: 'slot_unavailable'; message: string }
   | { status: 'error'; message: string };
 
-function parseHttpErrorMessage(rawBody: string): string {
+function parseHttpError(rawBody: string): { message: string; code?: string } {
   try {
-    const parsed = JSON.parse(rawBody) as { message?: string };
+    const parsed = JSON.parse(rawBody) as { message?: string; code?: string };
     if (typeof parsed?.message === 'string' && parsed.message.trim()) {
-      return parsed.message.trim();
+      return {
+        message: parsed.message.trim(),
+        code: typeof parsed?.code === 'string' ? parsed.code : undefined,
+      };
     }
   } catch {
     // ignore json parse
   }
   const fallback = rawBody.trim();
-  return fallback || 'Error de integración con agenda de citas';
+  return { message: fallback || 'Error de integración con agenda de citas' };
 }
 
 function internalAuthHeaders(correlationId: string): Record<string, string> {
@@ -911,7 +914,8 @@ async function fetchChatbotAvailability(input: {
 
     const bodyText = await response.text();
     if (!response.ok) {
-      const message = parseHttpErrorMessage(bodyText);
+      const parsedError = parseHttpError(bodyText);
+      const message = parsedError.message;
       log.warn({ correlationId: input.correlationId, day: input.day, mode: input.mode, status: response.status, body: bodyText }, 'No se pudo obtener disponibilidad real de citas');
       return { status: 'error', message };
     }
@@ -967,13 +971,15 @@ async function scheduleChatbotAppointmentInAuth(input: {
 
     const bodyText = await response.text();
     if (!response.ok) {
-      const message = parseHttpErrorMessage(bodyText);
+      const parsedError = parseHttpError(bodyText);
+      const message = parsedError.message;
+      const errorCode = (parsedError.code || '').toUpperCase();
       log.warn({ correlationId: input.correlationId, status: response.status, body: bodyText }, 'No se pudo agendar cita real en auth-service');
       const normalized = normalizeForMatch(message);
-      if (response.status === 409 && (normalized.includes('hora seleccionada no esta disponible') || normalized.includes('slot_not_available') || normalized.includes('no esta disponible'))) {
+      if (response.status === 409 && (errorCode === 'SLOT_NOT_AVAILABLE' || normalized.includes('hora seleccionada no esta disponible') || normalized.includes('slot_not_available') || normalized.includes('no esta disponible'))) {
         return { status: 'slot_unavailable', message };
       }
-      if (response.status === 409 && (normalized.includes('no hay estudiantes elegibles') || normalized.includes('no_eligible_students'))) {
+      if (response.status === 409 && (errorCode === 'NO_ELIGIBLE_STUDENTS' || normalized.includes('no hay estudiantes elegibles') || normalized.includes('no_eligible_students'))) {
         return { status: 'no_eligible_students', message };
       }
       return { status: 'error', message };
@@ -1044,10 +1050,12 @@ async function rescheduleChatbotAppointmentInAuth(input: {
 
     const bodyText = await response.text();
     if (!response.ok) {
-      const message = parseHttpErrorMessage(bodyText);
+      const parsedError = parseHttpError(bodyText);
+      const message = parsedError.message;
+      const errorCode = (parsedError.code || '').toUpperCase();
       log.warn({ correlationId: input.correlationId, citaId: input.citaId, status: response.status, body: bodyText }, 'No se pudo reprogramar cita real en auth-service');
       const normalized = normalizeForMatch(message);
-      if (response.status === 409 && (normalized.includes('hora seleccionada no esta disponible') || normalized.includes('slot_not_available') || normalized.includes('no esta disponible'))) {
+      if (response.status === 409 && (errorCode === 'SLOT_NOT_AVAILABLE' || normalized.includes('hora seleccionada no esta disponible') || normalized.includes('slot_not_available') || normalized.includes('no esta disponible'))) {
         return { status: 'slot_unavailable', message };
       }
       return { status: 'error', message };
