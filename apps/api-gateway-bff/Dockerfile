@@ -3,7 +3,7 @@ FROM node:20-alpine
 RUN corepack enable
 WORKDIR /app
 
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/api-gateway-bff ./apps/api-gateway-bff
 
