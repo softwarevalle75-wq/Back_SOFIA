@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { logger } from './logger';
 
 export function httpLoggerMiddleware(req: Request, res: Response, next: NextFunction): void {
