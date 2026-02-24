@@ -46,6 +46,52 @@ type TelegramUpdate = {
 
 const ANALYZING_TEXT = 'Estamos analizando tu consulta, ya te respondemos.';
 
+const QUICK_FLOW_EXACT_MATCH = new Set([
+  'hola',
+  'menu',
+  'menú',
+  'ayuda',
+  'reset',
+  'salir',
+  'si',
+  'sí',
+  'no',
+  'ok',
+  'dale',
+  'confirmar cita',
+  'cancelar cita',
+  'reprogramar cita',
+  'si deseo agendar una cita',
+]);
+
+const QUICK_FLOW_PREFIXES = [
+  'cambiar ',
+  'confirmar ',
+  'cancelar ',
+  'reprogramar ',
+  'agendar ',
+  'opcion ',
+  'opción ',
+];
+
+function normalizeInputText(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function shouldSendAnalyzingNotice(text: string): boolean {
+  const normalized = normalizeInputText(text);
+  if (!normalized) return false;
+  if (normalized.startsWith('/')) return false;
+  if (/^\d+$/.test(normalized)) return false;
+  if (QUICK_FLOW_EXACT_MATCH.has(normalized)) return false;
+  if (QUICK_FLOW_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false;
+  return true;
+}
+
 const processedUpdateIds = new Set<number>();
 let polling = false;
 let lastError: string | null = null;
@@ -169,11 +215,13 @@ async function processUpdate(update: TelegramUpdate): Promise<void> {
   });
 
   try {
-    await callTelegram('sendMessage', {
-      chat_id: message.chat.id,
-      text: ANALYZING_TEXT,
-      disable_web_page_preview: true,
-    });
+    if (shouldSendAnalyzingNotice(body)) {
+      await callTelegram('sendMessage', {
+        chat_id: message.chat.id,
+        text: ANALYZING_TEXT,
+        disable_web_page_preview: true,
+      });
+    }
 
     const orchestratorRes = await callOrchestrator({
       from,
