@@ -70,6 +70,9 @@ const APPOINTMENT_DOC_TYPE_TEXT =
 const DATA_POLICY_TEXT =
   '¡Hola! 👋 Qué gusto saludarte. Antes de comenzar, ¿me autorizas a tratar tus datos personales según nuestra política de privacidad?';
 
+const TELEGRAM_DATA_POLICY_TEXT =
+  '¡Hola! 👋 Soy Sofia, tu asistente virtual del Consultorio Jurídico. Antes de comenzar, ¿me autorizas a tratar tus datos personales según nuestra política de privacidad?';
+
 const DATA_POLICY_REJECTED_TEXT =
   'Gracias por responder. Sin esa autorización no puedo continuar por este medio. Si más adelante quieres continuar, escribe reset. ¡Aquí estaré!';
 
@@ -97,7 +100,12 @@ const PRELIMINARY_GUIDANCE_DISCLAIMER =
 const ORIENTATION_DETAIL_PROMPT =
   'Si deseas una orientación más específica, puedes enviarme información adicional en texto como:\n📅 Fechas importantes\n🧾 Qué ocurrió exactamente\n👥 Quiénes están involucrados\n🎯 Qué resultado esperas\n\nEntre más detalles me compartas, mejor podré orientarte.';
 
-const MENU_TEXT = `👋 ¡Bienvenido/a!\n\nSoy SOF-IA 🤖, tu asistente virtual del Consultorio Jurídico.\n\nPuedo orientarte de manera preliminar en temas como:\n\n⚖️ Laboral\n⚖️ Penal\n⚖️ Civil\n⚖️ Familia\n⚖️ Constitucional\n⚖️ Administrativo\n⚖️ Conciliación\n⚖️ Tránsito\n\nCuéntame con tranquilidad tu caso o tu duda, y te acompañaré paso a paso 🤝`;
+const MENU_TEXT = `👋 ¡Bienvenido/a!\n\nSoy SOF-IA 🤖, tu asistente virtual del Consultorio Jurídico.\n\nPuedo orientarte de manera preliminar en temas como:\n\n⚖️ Laboral\n⚖️ Penal\n⚖️ Civil\n⚖️ Familia-alimentos\n⚖️ Constitucional\n⚖️ Administrativo\n⚖️ Conciliación\n⚖️ Tránsito\n⚖️ Disciplinario\n⚖️ Responsabilidad fiscal\n⚖️ Comercial\n\nCuéntame con tranquilidad tu caso o tu duda, y te acompañaré paso a paso 🤝`;
+
+function getDataPolicyText(channel: MessageIn['channel']): string {
+  if (channel === 'telegram') return TELEGRAM_DATA_POLICY_TEXT;
+  return DATA_POLICY_TEXT;
+}
 
 function mapChannel(channel: MessageIn['channel']): ConversationChannel {
   if (channel === 'telegram' || channel === 'whatsapp') return 'WHATSAPP';
@@ -1357,7 +1365,7 @@ async function runStatefulFlow(input: {
       profile: resetProfile,
     });
     return {
-      responseText: DATA_POLICY_TEXT,
+      responseText: getDataPolicyText(input.messageIn.channel),
       patch: { intent: 'general', step: 'ask_intent', profile: resetProfile },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', reset: true },
     };
@@ -1510,7 +1518,7 @@ async function runStatefulFlow(input: {
     }
 
     return {
-      responseText: DATA_POLICY_TEXT,
+      responseText: getDataPolicyText(input.messageIn.channel),
       patch: { intent: 'general', step: 'ask_intent', profile: { ...(state.profile ?? {}), policyAccepted: false } },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', awaitingPolicyConsent: true },
     };
