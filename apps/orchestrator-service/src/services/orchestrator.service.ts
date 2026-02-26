@@ -957,6 +957,7 @@ async function scheduleChatbotAppointmentInAuth(input: {
   day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
   mode: 'virtual' | 'presencial';
   hour24: number;
+  conversationId: string;
   userData: AppointmentUserData;
   reason?: string;
 }): Promise<ChatbotScheduleOutcome> {
@@ -968,6 +969,7 @@ async function scheduleChatbotAppointmentInAuth(input: {
         day: input.day,
         mode: input.mode,
         hour24: input.hour24,
+        conversationId: input.conversationId,
         motivo: input.reason,
         userName: input.userData.fullName,
         userDocumentType: input.userData.documentType,
@@ -2590,6 +2592,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         day,
         mode,
         hour24,
+        conversationId: input.conversationId,
         userData: confirmedUserData,
         reason: 'Cita agendada desde chatbot',
       });
