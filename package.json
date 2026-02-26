@@ -7,6 +7,7 @@
     "build": "pnpm -r run build",
     "dev:identidad": "pnpm --filter ms-identidad-acceso run dev",
     "dev:gateway": "pnpm --filter api-gateway-bff run dev",
+    "dev:chatbot-web": "pnpm --filter chatbot-web-service run dev",
     "dev:core": "pnpm run dev:identidad & pnpm run dev:gateway",
     "lint": "pnpm -r run lint",
     "test": "pnpm -r run test",
