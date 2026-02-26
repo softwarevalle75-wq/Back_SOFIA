@@ -3558,7 +3558,28 @@ function isBotInfoQuery(text: string): boolean {
 function inferCaseTypeFromText(text: string): string | undefined {
   const normalized = normalizeForMatch(text);
   const matchers: Array<{ label: string; keys: string[] }> = [
-    { label: 'Laboral', keys: ['laboral', 'despido', 'liquidacion', 'empleador', 'contrato de trabajo', 'salario', 'cesantias', 'vacaciones'] },
+    {
+      label: 'Laboral',
+      keys: [
+        'laboral',
+        'despido',
+        'me echaron',
+        'me saco de la empresa',
+        'terminacion de contrato',
+        'terminaron mi contrato',
+        'liquidacion',
+        'empleador',
+        'contrato de trabajo',
+        'salario',
+        'no me pagan',
+        'no me pagaron',
+        'cesantias',
+        'vacaciones',
+        'prestaciones',
+        'indemnizacion',
+        'acoso laboral',
+      ],
+    },
     {
       label: 'Penal',
       keys: [
@@ -3586,7 +3607,7 @@ function inferCaseTypeFromText(text: string): string | undefined {
         'denunciar',
       ],
     },
-    { label: 'Civil', keys: ['civil', 'jueces municipales', 'compraventa', 'arrendamiento', 'incumplimiento de contrato'] },
+    { label: 'Civil', keys: ['civil', 'jueces municipales', 'compraventa', 'arrendamiento', 'incumplimiento de contrato', 'deuda', 'pagare', 'pagaré'] },
     {
       label: 'Familia',
       keys: [
@@ -3607,8 +3628,11 @@ function inferCaseTypeFromText(text: string): string | undefined {
     },
     { label: 'Constitucional', keys: ['tutela', 'cumplimiento', 'populares', 'derecho de peticion'] },
     { label: 'Administrativo', keys: ['administrativa', 'superintendencia', 'sede administrativa', 'recursos', 'peticion', 'queja', 'reclamacion'] },
-    { label: 'Conciliación', keys: ['conciliacion', 'centro de conciliacion', 'conciliables'] },
-    { label: 'Tránsito', keys: ['transito', 'contravencionales', 'comparendo', 'multa'] },
+    { label: 'Conciliación', keys: ['conciliacion', 'centro de conciliacion', 'conciliables', 'conciliar'] },
+    { label: 'Tránsito', keys: ['transito', 'contravencionales', 'comparendo', 'multa', 'accidente de transito', 'choque'] },
+    { label: 'Disciplinario', keys: ['disciplinario', 'procuraduria', 'falta disciplinaria'] },
+    { label: 'Responsabilidad fiscal', keys: ['responsabilidad fiscal', 'contraloria', 'hallazgo fiscal'] },
+    { label: 'Comercial', keys: ['comercial', 'camara de comercio', 'sociedad', 'empresa', 'mercantil'] },
   ];
 
   for (const matcher of matchers) {
@@ -3633,10 +3657,17 @@ function hasLaborEvidence(text: string): boolean {
     'empleo',
     'empleador',
     'despido',
+    'echaron',
+    'me echaron',
+    'desvincularon',
+    'terminaron mi contrato',
     'renuncia',
     'liquidacion',
     'liquidación',
     'prestaciones',
+    'indemnizacion',
+    'no me pagan',
+    'no me pagaron',
     'contrato de trabajo',
     'salario',
     'nomina',
