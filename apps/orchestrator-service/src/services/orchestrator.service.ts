@@ -1771,35 +1771,6 @@ async function runStatefulFlow(input: {
       }
     }
 
-    const inferredPhone = pickPhoneFromExternalUserId(input.messageIn.externalUserId);
-    if (inferredPhone) {
-      const profileWithPhone = {
-        ...nextProfile,
-        appointmentUser: {
-          ...(nextProfile.appointmentUser as Record<string, unknown>),
-          phone: inferredPhone,
-        },
-      };
-
-      conversationStore.set(key, {
-        stage: 'awaiting_user_phone_confirm',
-        category: 'laboral',
-        profile: profileWithPhone,
-      });
-
-      return {
-        responseText: `Perfecto. Encontré este número de contacto: ${inferredPhone}
-
-Responde con una de estas opciones:
-1) Sí, usar este número
-2) No, quiero cambiarlo
-
-También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
-        patch: { intent: 'consulta_laboral', step: 'ask_user_phone_confirm', profile: profileWithPhone },
-        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'collect_user_phone_confirm' },
-      };
-    }
-
     conversationStore.set(key, {
       stage: 'awaiting_user_phone',
       category: 'laboral',
@@ -1827,6 +1798,25 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
           phone: providedPhone,
         },
       };
+
+      if (shouldReturnToConfirm(profile)) {
+        const userData = pickAppointmentUserData(nextProfile);
+        const schedule = pickAppointmentScheduleData(nextProfile);
+        if (userData && schedule) {
+          const finalProfile = clearReturnToConfirmFlag(nextProfile);
+          conversationStore.set(key, {
+            stage: 'awaiting_appointment_confirm',
+            category: 'laboral',
+            profile: finalProfile,
+          });
+          return {
+            responseText: buildAppointmentConfirmationText(userData, schedule),
+            patch: { intent: 'consulta_laboral', step: 'confirm_appointment', profile: finalProfile },
+            payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'confirm_after_change' },
+          };
+        }
+      }
+
       conversationStore.set(key, {
         stage: 'awaiting_appointment_mode',
         category: 'laboral',
@@ -1851,6 +1841,24 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
           patch: { intent: 'consulta_laboral', step: 'ask_user_phone', profile },
           payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'user_phone_missing' },
         };
+      }
+
+      if (shouldReturnToConfirm(profile)) {
+        const userData = pickAppointmentUserData(profile);
+        const schedule = pickAppointmentScheduleData(profile);
+        if (userData && schedule) {
+          const finalProfile = clearReturnToConfirmFlag(profile);
+          conversationStore.set(key, {
+            stage: 'awaiting_appointment_confirm',
+            category: 'laboral',
+            profile: finalProfile,
+          });
+          return {
+            responseText: buildAppointmentConfirmationText(userData, schedule),
+            patch: { intent: 'consulta_laboral', step: 'confirm_appointment', profile: finalProfile },
+            payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'confirm_after_change' },
+          };
+        }
       }
 
       conversationStore.set(key, {
@@ -1903,34 +1911,22 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       },
     };
 
-    if (shouldReturnToConfirm(profile)) {
-      const userData = pickAppointmentUserData(nextProfile);
-      const schedule = pickAppointmentScheduleData(nextProfile);
-      if (userData && schedule) {
-        const finalProfile = clearReturnToConfirmFlag(nextProfile);
-        conversationStore.set(key, {
-          stage: 'awaiting_appointment_confirm',
-          category: 'laboral',
-          profile: finalProfile,
-        });
-        return {
-          responseText: buildAppointmentConfirmationText(userData, schedule),
-          patch: { intent: 'consulta_laboral', step: 'confirm_appointment', profile: finalProfile },
-          payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'confirm_after_change' },
-        };
-      }
-    }
-
     conversationStore.set(key, {
-      stage: 'awaiting_appointment_mode',
+      stage: 'awaiting_user_phone_confirm',
       category: 'laboral',
       profile: nextProfile,
     });
 
     return {
-      responseText: APPOINTMENT_MODE_TEXT,
-      patch: { intent: 'consulta_laboral', step: 'ask_appointment_mode', profile: nextProfile },
-      payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'mode' },
+      responseText: `Perfecto. Registré este número de contacto: ${phone}
+
+Responde con una de estas opciones:
+1) Sí, usar este número
+2) No, quiero cambiarlo
+
+También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
+      patch: { intent: 'consulta_laboral', step: 'ask_user_phone_confirm', profile: nextProfile },
+      payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'collect_user_phone_confirm' },
     };
   }
 
