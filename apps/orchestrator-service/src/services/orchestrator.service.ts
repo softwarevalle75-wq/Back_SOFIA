@@ -348,7 +348,26 @@ function hasWeekendMention(text: string): boolean {
   return normalized.includes('sabado') || normalized.includes('domingo');
 }
 
-function pickHour24(text: string): number | undefined {
+type AppointmentTimeSlot = {
+  hour24: number;
+  minute: 0 | 30;
+};
+
+function buildSlotKey(hour24: number, minute: number): string {
+  return `${String(hour24).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function parseSlotKey(slot: string): AppointmentTimeSlot | undefined {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(slot || '').trim());
+  if (!match) return undefined;
+  const hour24 = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hour24) || hour24 < 0 || hour24 > 23) return undefined;
+  if (minute !== 0 && minute !== 30) return undefined;
+  return { hour24, minute: minute as 0 | 30 };
+}
+
+function pickTimeSlot(text: string): AppointmentTimeSlot | undefined {
   const normalized = normalizeForMatch(text);
   const match = normalized.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
   if (!match) return undefined;
@@ -372,7 +391,13 @@ function pickHour24(text: string): number | undefined {
   }
 
   if (hour < 0 || hour > 23) return undefined;
-  return hour;
+
+  const explicitMinute = match[2] ? Number.parseInt(match[2], 10) : undefined;
+  const inferredHalfHour = normalized.includes('y media') || normalized.includes('media');
+  const minuteRaw = explicitMinute ?? (inferredHalfHour ? 30 : 0);
+  if (minuteRaw !== 0 && minuteRaw !== 30) return undefined;
+
+  return { hour24: hour, minute: minuteRaw as 0 | 30 };
 }
 
 function isHourAllowedByMode(mode: 'virtual' | 'presencial', hour24: number): boolean {
@@ -382,26 +407,28 @@ function isHourAllowedByMode(mode: 'virtual' | 'presencial', hour24: number): bo
   return allowed.includes(hour24);
 }
 
-function formatHour(hour24: number): string {
+function formatHour(hour24: number, minute = 0): string {
   const suffix = hour24 >= 12 ? 'PM' : 'AM';
   const raw = hour24 % 12;
   const hour12 = raw === 0 ? 12 : raw;
-  return `${hour12}:00 ${suffix}`;
+  return `${hour12}:${String(minute).padStart(2, '0')} ${suffix}`;
 }
 
 function appointmentHourHint(mode: 'virtual' | 'presencial'): string {
-  if (mode === 'virtual') return 'Horario virtual disponible: 8:00, 9:00, 10:00, 11:00, 12:00, 13:00, 14:00, 15:00, 16:00 y 17:00.';
-  return 'Horario presencial disponible: 13:00, 14:00, 15:00, 16:00 y 17:00.';
+  if (mode === 'virtual') return 'Horario virtual disponible cada 30 minutos: 8:00, 8:30, 9:00 ... 17:00.';
+  return 'Horario presencial disponible cada 30 minutos: 13:00, 13:30, 14:00 ... 17:00.';
 }
 
-function buildAvailableHoursText(mode: 'virtual' | 'presencial', hours24: number[]): string {
-  if (hours24.length === 0) {
+function buildAvailableHoursText(mode: 'virtual' | 'presencial', slots: string[]): string {
+  if (slots.length === 0) {
     return `No hay horas disponibles para ${mode} ese día.`;
   }
-  const formatted = hours24
-    .slice()
-    .sort((a, b) => a - b)
-    .map((hour) => formatHour(hour))
+  const uniqueSorted = Array.from(new Set(slots))
+    .map((slot) => parseSlotKey(slot))
+    .filter((slot): slot is AppointmentTimeSlot => Boolean(slot))
+    .sort((a, b) => (a.hour24 * 60 + a.minute) - (b.hour24 * 60 + b.minute));
+  const formatted = uniqueSorted
+    .map((slot) => formatHour(slot.hour24, slot.minute))
     .join(', ');
   return `Horas disponibles para ${mode}: ${formatted}.`;
 }
@@ -647,6 +674,7 @@ type AppointmentScheduleData = {
   mode: 'virtual' | 'presencial';
   day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
   hour24: number;
+  minute: 0 | 30;
 };
 
 type LaboralCompetenceAssessment = {
@@ -681,9 +709,10 @@ function pickAppointmentScheduleData(profile: Record<string, unknown>): Appointm
     : undefined;
   const day = pickWeekday(String(appointment.day ?? ''));
   const hour24 = typeof appointment.hour24 === 'number' ? appointment.hour24 : undefined;
+  const minute = appointment.minute === 30 ? 30 : 0;
 
   if (!mode || !day || hour24 === undefined || !isHourAllowedByMode(mode, hour24)) return undefined;
-  return { mode, day, hour24 };
+  return { mode, day, hour24, minute };
 }
 
 function shouldReturnToConfirm(profile: Record<string, unknown>): boolean {
@@ -698,16 +727,16 @@ function clearReturnToConfirmFlag(profile: Record<string, unknown>): Record<stri
 }
 
 function buildAppointmentConfirmationText(userData: AppointmentUserData, schedule: AppointmentScheduleData): string {
-  return `📝 Confirmación de tu cita\n\nPor favor, revisa que tus datos estén correctos:\n\n👤 Nombre completo: ${userData.fullName}\n🪪 Tipo de documento: ${userData.documentType}\n🔢 Número de documento: ${userData.documentNumber}\n📧 Correo electrónico: ${userData.email}\n📱 Número de contacto: ${userData.phone}\n📍 Modalidad: ${schedule.mode}\n📅 Día: ${formatWeekday(schedule.day)}\n⏰ Hora: ${formatHour(schedule.hour24)}\n\nSi necesitas modificar algún dato, escribe por ejemplo:\n• cambiar nombre\n• cambiar tipo de documento\n• cambiar número de documento\n• cambiar correo\n• cambiar número\n• cambiar modalidad\n• cambiar día\n• cambiar hora\n\nSi todo está correcto, escribe: ✅ confirmar cita`;
+  return `📝 Confirmación de tu cita\n\nPor favor, revisa que tus datos estén correctos:\n\n👤 Nombre completo: ${userData.fullName}\n🪪 Tipo de documento: ${userData.documentType}\n🔢 Número de documento: ${userData.documentNumber}\n📧 Correo electrónico: ${userData.email}\n📱 Número de contacto: ${userData.phone}\n📍 Modalidad: ${schedule.mode}\n📅 Día: ${formatWeekday(schedule.day)}\n⏰ Hora: ${formatHour(schedule.hour24, schedule.minute)}\n\nSi necesitas modificar algún dato, escribe por ejemplo:\n• cambiar nombre\n• cambiar tipo de documento\n• cambiar número de documento\n• cambiar correo\n• cambiar número\n• cambiar modalidad\n• cambiar día\n• cambiar hora\n\nSi todo está correcto, escribe: ✅ confirmar cita`;
 }
 
 function buildAppointmentScheduledFriendlyText(schedule: AppointmentScheduleData): string {
   const modeLabel = schedule.mode === 'presencial' ? 'presencial' : 'virtual';
 
-  return `✨ *¡Tu cita está confirmada!*
+return `✨ *¡Tu cita está confirmada!*
 
 📅 *${formatWeekday(schedule.day)}*
-⏰ *${formatHour(schedule.hour24)}*
+⏰ *${formatHour(schedule.hour24, schedule.minute)}*
 📍 *Modalidad ${modeLabel}*
 
 ¡Te esperamos! 🙌
@@ -736,6 +765,7 @@ function toStoredAppointment(value: unknown): StoredAppointment | undefined {
   const mode = data.mode === 'virtual' || data.mode === 'presencial' ? data.mode : undefined;
   const day = pickWeekday(String(data.day ?? ''));
   const hour24 = typeof data.hour24 === 'number' ? data.hour24 : undefined;
+  const minute = data.minute === 30 ? 30 : 0;
   if (!mode || !day || hour24 === undefined || !isHourAllowedByMode(mode, hour24)) return undefined;
 
   const statusRaw = String(data.status ?? 'agendada').toLowerCase();
@@ -745,7 +775,7 @@ function toStoredAppointment(value: unknown): StoredAppointment | undefined {
   const assignedStudentName = typeof data.assignedStudentName === 'string' ? data.assignedStudentName : undefined;
   const assignedStudentEmail = typeof data.assignedStudentEmail === 'string' ? data.assignedStudentEmail : undefined;
   const user = typeof data.user === 'object' && data.user !== null ? data.user as Record<string, unknown> : undefined;
-  return { mode, day, hour24, status, updatedAt, citaId, assignedStudentName, assignedStudentEmail, user };
+  return { mode, day, hour24, minute, status, updatedAt, citaId, assignedStudentName, assignedStudentEmail, user };
 }
 
 function getStoredAppointments(profile: Record<string, unknown>): StoredAppointment[] {
@@ -792,7 +822,7 @@ function hydrateAppointmentsFromContext(
   const merged = [...current, ...remembered];
   const unique = new Map<string, StoredAppointment>();
   for (const item of merged) {
-    const key = `${item.updatedAt}|${item.day}|${item.hour24}|${item.mode}|${item.status}`;
+    const key = `${item.updatedAt}|${item.day}|${item.hour24}|${item.minute}|${item.mode}|${item.status}`;
     if (!unique.has(key)) unique.set(key, item);
   }
 
@@ -807,6 +837,7 @@ function hydrateAppointmentsFromContext(
       return item.updatedAt === other.updatedAt
         && item.day === other.day
         && item.hour24 === other.hour24
+        && item.minute === other.minute
         && item.mode === other.mode
         && item.status === other.status
         && item.citaId === other.citaId;
@@ -854,7 +885,7 @@ function clearTransientConsultationProfile(profile: Record<string, unknown>): Re
 function buildAppointmentListText(appointments: StoredAppointment[]): string {
   const lines = appointments.map((item, index) => {
     const statusLabel = item.status === 'cancelada' ? 'Cancelada' : 'Agendada';
-    return `${index + 1}) ${formatWeekday(item.day)} - ${formatHour(item.hour24)} - ${item.mode} (${statusLabel})`;
+    return `${index + 1}) ${formatWeekday(item.day)} - ${formatHour(item.hour24, item.minute)} - ${item.mode} (${statusLabel})`;
   });
 
   return `Estas son tus citas registradas:\n${lines.join('\n')}`;
@@ -863,7 +894,7 @@ function buildAppointmentListText(appointments: StoredAppointment[]): string {
 type ChatbotAvailabilityResult = {
   day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
   mode: 'virtual' | 'presencial';
-  hours24: number[];
+  slots: string[];
 };
 
 type ChatbotAvailabilityLookup =
@@ -875,6 +906,7 @@ type ChatbotScheduleResult = {
   day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
   mode: 'virtual' | 'presencial';
   hour24: number;
+  minute: 0 | 30;
   studentName?: string;
   studentEmail?: string;
 };
@@ -886,7 +918,7 @@ type ChatbotScheduleOutcome =
   | { status: 'error'; message: string };
 
 type ChatbotRescheduleOutcome =
-  | { status: 'ok'; result: Pick<ChatbotScheduleResult, 'day' | 'hour24' | 'mode'> }
+  | { status: 'ok'; result: Pick<ChatbotScheduleResult, 'day' | 'hour24' | 'minute' | 'mode'> }
   | { status: 'slot_unavailable'; message: string }
   | { status: 'error'; message: string };
 
@@ -939,20 +971,27 @@ async function fetchChatbotAvailability(input: {
 
     const parsed = JSON.parse(bodyText) as any;
     const hoursRaw = Array.isArray(parsed?.data?.horasDisponibles) ? parsed.data.horasDisponibles : [];
-    const hours24 = hoursRaw
+    const parsedSlots: string[] = hoursRaw
       .map((value: unknown) => {
-        const match = /^(\d{1,2}):(\d{2})$/.exec(String(value));
-        if (!match) return undefined;
-        return Number.parseInt(match[1], 10);
+        const parsedSlot = parseSlotKey(String(value));
+        if (!parsedSlot) return undefined;
+        return buildSlotKey(parsedSlot.hour24, parsedSlot.minute);
       })
-      .filter((value: number | undefined): value is number => typeof value === 'number' && Number.isFinite(value));
+      .filter((value: string | undefined): value is string => typeof value === 'string');
+    const slots = Array.from(new Set(parsedSlots)).sort((a, b) => {
+        const slotA = parseSlotKey(a);
+        const slotB = parseSlotKey(b);
+        const totalA = slotA ? slotA.hour24 * 60 + slotA.minute : 0;
+        const totalB = slotB ? slotB.hour24 * 60 + slotB.minute : 0;
+        return totalA - totalB;
+      });
 
     return {
       status: 'ok',
       result: {
         day: input.day,
         mode: input.mode,
-        hours24,
+        slots,
       },
     };
   } catch (error) {
@@ -966,6 +1005,7 @@ async function scheduleChatbotAppointmentInAuth(input: {
   day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
   mode: 'virtual' | 'presencial';
   hour24: number;
+  minute: 0 | 30;
   conversationId: string;
   userData: AppointmentUserData;
   reason?: string;
@@ -978,6 +1018,7 @@ async function scheduleChatbotAppointmentInAuth(input: {
         day: input.day,
         mode: input.mode,
         hour24: input.hour24,
+        minute: input.minute,
         conversationId: input.conversationId,
         motivo: input.reason,
         userName: input.userData.fullName,
@@ -1009,6 +1050,7 @@ async function scheduleChatbotAppointmentInAuth(input: {
     const mode = parsed?.data?.mode === 'presencial' ? 'presencial' : 'virtual';
     const day = pickWeekday(String(parsed?.data?.day || input.day)) || input.day;
     const hour24 = typeof parsed?.data?.hour24 === 'number' ? parsed.data.hour24 : input.hour24;
+    const minute = parsed?.data?.minute === 30 ? 30 : input.minute;
 
     if (!citaId) return { status: 'error', message: 'No se recibió identificador de cita desde el servicio de agenda.' };
 
@@ -1019,6 +1061,7 @@ async function scheduleChatbotAppointmentInAuth(input: {
         day,
         mode,
         hour24,
+        minute,
         studentName: typeof parsed?.data?.estudianteNombre === 'string' ? parsed.data.estudianteNombre : undefined,
         studentEmail: typeof parsed?.data?.estudianteCorreo === 'string' ? parsed.data.estudianteCorreo : undefined,
       },
@@ -1055,6 +1098,7 @@ async function rescheduleChatbotAppointmentInAuth(input: {
   citaId: string;
   day: 'lunes' | 'martes' | 'miercoles' | 'jueves' | 'viernes';
   hour24: number;
+  minute: 0 | 30;
 }): Promise<ChatbotRescheduleOutcome> {
   try {
     const response = await fetch(`${env.AUTH_SERVICE_URL}/api/citas/chatbot/reprogramar`, {
@@ -1064,6 +1108,7 @@ async function rescheduleChatbotAppointmentInAuth(input: {
         citaId: input.citaId,
         day: input.day,
         hour24: input.hour24,
+        minute: input.minute,
       }),
     });
 
@@ -1083,8 +1128,9 @@ async function rescheduleChatbotAppointmentInAuth(input: {
     const parsed = JSON.parse(bodyText) as any;
     const day = pickWeekday(String(parsed?.data?.day || input.day)) || input.day;
     const hour24 = typeof parsed?.data?.hour24 === 'number' ? parsed.data.hour24 : input.hour24;
+    const minute = parsed?.data?.minute === 30 ? 30 : input.minute;
     const mode = parsed?.data?.mode === 'presencial' ? 'presencial' : 'virtual';
-    return { status: 'ok', result: { day, hour24, mode } };
+    return { status: 'ok', result: { day, hour24, minute, mode } };
   } catch (error) {
     log.warn({ correlationId: input.correlationId, citaId: input.citaId, error: error instanceof Error ? error.message : String(error) }, 'Error reprogramando cita real en auth-service');
     return { status: 'error', message: 'No fue posible reprogramar la cita en este momento.' };
@@ -1107,11 +1153,11 @@ function pickRescheduleField(text: string): 'modalidad' | 'dia' | 'hora' | undef
 }
 
 function buildAppointmentEditConfirmationText(schedule: AppointmentScheduleData): string {
-  return `Confírmame los datos de la cita reprogramada:\n- Modalidad: ${schedule.mode}\n- Día: ${formatWeekday(schedule.day)}\n- Hora: ${formatHour(schedule.hour24)}\n\nSi deseas cambiar un dato escribe: cambiar modalidad, cambiar dia o cambiar hora.\nSi todo está correcto escribe: confirmar cita.`;
+  return `Confírmame los datos de la cita reprogramada:\n- Modalidad: ${schedule.mode}\n- Día: ${formatWeekday(schedule.day)}\n- Hora: ${formatHour(schedule.hour24, schedule.minute)}\n\nSi deseas cambiar un dato escribe: cambiar modalidad, cambiar dia o cambiar hora.\nSi todo está correcto escribe: confirmar cita.`;
 }
 
 function buildAppointmentCancelConfirmationText(schedule: AppointmentScheduleData): string {
-  return `Vas a cancelar esta cita:\n- Modalidad: ${schedule.mode}\n- Día: ${formatWeekday(schedule.day)}\n- Hora: ${formatHour(schedule.hour24)}\n\nSi estás de acuerdo escribe: cancelar cita.`;
+  return `Vas a cancelar esta cita:\n- Modalidad: ${schedule.mode}\n- Día: ${formatWeekday(schedule.day)}\n- Hora: ${formatHour(schedule.hour24, schedule.minute)}\n\nSi estás de acuerdo escribe: cancelar cita.`;
 }
 
 function evaluateLaboralCompetence(text: string): LaboralCompetenceAssessment {
@@ -2021,13 +2067,13 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
     });
 
     const hasAvailabilityData = availability.status === 'ok';
-    const availableHours = hasAvailabilityData ? availability.result.hours24 : [];
+    const availableSlots = hasAvailabilityData ? availability.result.slots : [];
     const nextProfileWithAvailability = {
       ...nextProfile,
-      appointmentAvailableHours: availableHours,
+      appointmentAvailableHours: availableSlots,
     };
 
-    if (hasAvailabilityData && availableHours.length === 0) {
+    if (hasAvailabilityData && availableSlots.length === 0) {
       conversationStore.set(key, {
         stage: 'awaiting_appointment_day',
         category: 'laboral',
@@ -2048,12 +2094,12 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
     });
 
       return {
-      responseText: hasAvailabilityData
-        ? `${buildAvailableHoursText(mode, availableHours)} Indica la hora de tu cita.`
+        responseText: hasAvailabilityData
+        ? `${buildAvailableHoursText(mode, availableSlots)} Indica la hora de tu cita.`
         : `${appointmentHourHint(mode)} Indica la hora de tu cita.`,
-      patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile: nextProfileWithAvailability },
-      payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time' },
-    };
+        patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile: nextProfileWithAvailability },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time' },
+      };
   }
 
   if (state.category === 'laboral' && state.stage === 'awaiting_appointment_time') {
@@ -2103,10 +2149,10 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       };
     }
 
-    const hour24 = pickHour24(input.text);
-    if (hour24 === undefined) {
+    const pickedSlot = pickTimeSlot(input.text);
+    if (!pickedSlot) {
       return {
-        responseText: `${appointmentHourHint(mode)} Escribe la hora en formato como 8am, 3pm o 15:00.`,
+        responseText: `${appointmentHourHint(mode)} Escribe la hora en formato como 8am, 8:30am, 3pm o 15:30.`,
         patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time_invalid' },
       };
@@ -2118,7 +2164,9 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       mode,
     });
     const hasAvailabilityData = availability.status === 'ok';
-    const availableHours = hasAvailabilityData ? availability.result.hours24 : [];
+    const availableSlots = hasAvailabilityData ? availability.result.slots : [];
+    const { hour24, minute } = pickedSlot;
+    const selectedSlotKey = buildSlotKey(hour24, minute);
     const selectedIndexForEdit = typeof profile.rescheduleSelectedIndex === 'number'
       ? profile.rescheduleSelectedIndex
       : -1;
@@ -2134,35 +2182,36 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       && selectedForEdit.citaId
       && selectedForEdit.day === day
       && selectedForEdit.mode === mode
-      && selectedForEdit.hour24 === hour24,
+      && selectedForEdit.hour24 === hour24
+      && selectedForEdit.minute === minute,
     );
 
     if (!isHourAllowedByMode(mode, hour24)) {
       return {
         responseText: hasAvailabilityData
-          ? `La hora no está disponible para modalidad ${mode}. ${buildAvailableHoursText(mode, availableHours)}`
+          ? `La hora no está disponible para modalidad ${mode}. ${buildAvailableHoursText(mode, availableSlots)}`
           : `La hora no está disponible para modalidad ${mode}. ${appointmentHourHint(mode)}`,
         patch: {
           intent: 'consulta_laboral',
           step: 'ask_appointment_time',
           profile: {
             ...profile,
-            appointmentAvailableHours: availableHours,
+            appointmentAvailableHours: availableSlots,
           },
         },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time_out_of_range' },
       };
     }
 
-    if (hasAvailabilityData && !availableHours.includes(hour24) && !isSameSlotAsCurrentEdit) {
+    if (hasAvailabilityData && !availableSlots.includes(selectedSlotKey) && !isSameSlotAsCurrentEdit) {
       return {
-        responseText: `Ese horario ya fue ocupado. ${buildAvailableHoursText(mode, availableHours)} Indica otra hora.`,
+        responseText: `Ese horario ya fue ocupado. ${buildAvailableHoursText(mode, availableSlots)} Indica otra hora.`,
         patch: {
           intent: 'consulta_laboral',
           step: 'ask_appointment_time',
           profile: {
             ...profile,
-            appointmentAvailableHours: availableHours,
+            appointmentAvailableHours: availableSlots,
           },
         },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'time_taken' },
@@ -2176,8 +2225,9 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         mode,
         day,
         hour24,
+        minute,
       },
-      appointmentAvailableHours: availableHours,
+      appointmentAvailableHours: availableSlots,
     };
 
     conversationStore.set(key, {
@@ -2186,7 +2236,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       profile: nextProfile,
     });
 
-    const schedule: AppointmentScheduleData = { mode, day, hour24 };
+    const schedule: AppointmentScheduleData = { mode, day, hour24, minute };
 
     return {
       responseText: isEditOnly
@@ -2410,13 +2460,13 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         mode,
       });
       const hasAvailabilityData = availability.status === 'ok';
-      const availableHours = hasAvailabilityData ? availability.result.hours24 : [];
+      const availableSlots = hasAvailabilityData ? availability.result.slots : [];
       const nextProfile = {
         ...profile,
-        appointmentAvailableHours: availableHours,
+        appointmentAvailableHours: availableSlots,
       };
 
-      if (hasAvailabilityData && availableHours.length === 0) {
+      if (hasAvailabilityData && availableSlots.length === 0) {
         conversationStore.set(key, {
           stage: 'awaiting_appointment_day',
           category: 'laboral',
@@ -2437,7 +2487,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
 
       return {
         responseText: hasAvailabilityData
-          ? `${buildAvailableHoursText(mode, availableHours)} Escribe una de esas horas.`
+          ? `${buildAvailableHoursText(mode, availableSlots)} Escribe una de esas horas.`
           : `No pude consultar la disponibilidad en este momento. Escribe "cambiar día" y vuelve a intentarlo en unos segundos.`,
         patch: { intent: 'consulta_laboral', step: 'ask_appointment_time', profile: nextProfile },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'availability_listed' },
@@ -2452,6 +2502,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         : undefined;
       const day = pickWeekday(String(appointment.day ?? ''));
       const hour24 = typeof appointment.hour24 === 'number' ? appointment.hour24 : undefined;
+      const minute = appointment.minute === 30 ? 30 : 0;
 
       if ((!isEditOnly && !userData) || !mode || !day || hour24 === undefined || !isHourAllowedByMode(mode, hour24)) {
         conversationStore.set(key, {
@@ -2472,6 +2523,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         mode,
         day,
         hour24,
+        minute,
         status: 'agendada',
         updatedAt: new Date().toISOString(),
         user: (typeof profile.appointmentUser === 'object' && profile.appointmentUser !== null)
@@ -2495,6 +2547,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
             citaId: previous.citaId,
             day,
             hour24,
+            minute,
           });
 
           if (reprogrammed.status !== 'ok') {
@@ -2508,13 +2561,13 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
 
             const availability = await fetchChatbotAvailability({ correlationId: input.correlationId, day, mode });
             const hasAvailabilityData = availability.status === 'ok';
-            const availableHours = hasAvailabilityData ? availability.result.hours24 : [];
+            const availableSlots = hasAvailabilityData ? availability.result.slots : [];
             const profileWithAvailability = {
               ...profile,
-              appointmentAvailableHours: availableHours,
+              appointmentAvailableHours: availableSlots,
             };
 
-            if (hasAvailabilityData && availableHours.length === 0) {
+            if (hasAvailabilityData && availableSlots.length === 0) {
               conversationStore.set(key, {
                 stage: 'awaiting_appointment_day',
                 category: 'laboral',
@@ -2539,7 +2592,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
 
             return {
               responseText: hasAvailabilityData
-                ? `Ese horario ya no está disponible. ${buildAvailableHoursText(mode, availableHours)} Indica una de esas horas.`
+                ? `Ese horario ya no está disponible. ${buildAvailableHoursText(mode, availableSlots)} Indica una de esas horas.`
                 : `No pude confirmar la disponibilidad real en este momento. Escribe "cambiar día" para intentar con otra fecha.`,
               patch: {
                 intent: 'consulta_laboral',
@@ -2556,6 +2609,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
             mode: reprogrammed.result.mode,
             day: reprogrammed.result.day,
             hour24: reprogrammed.result.hour24,
+            minute: reprogrammed.result.minute,
             assignedStudentName: previous.assignedStudentName,
             assignedStudentEmail: previous.assignedStudentEmail,
           };
@@ -2586,7 +2640,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         });
 
         return {
-          responseText: `✅ Tu cita fue reprogramada con éxito.\n\n📅 ${formatWeekday(updatedRecord.day)}\n⏰ ${formatHour(updatedRecord.hour24)}\n📍 Modalidad ${updatedRecord.mode}\n\n${FOLLOWUP_HINT_TEXT}`,
+          responseText: `✅ Tu cita fue reprogramada con éxito.\n\n📅 ${formatWeekday(updatedRecord.day)}\n⏰ ${formatHour(updatedRecord.hour24, updatedRecord.minute)}\n📍 Modalidad ${updatedRecord.mode}\n\n${FOLLOWUP_HINT_TEXT}`,
           patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
           payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'rescheduled' },
         };
@@ -2598,6 +2652,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         day,
         mode,
         hour24,
+        minute,
         conversationId: input.conversationId,
         userData: confirmedUserData,
         reason: 'Cita agendada desde chatbot',
@@ -2627,13 +2682,13 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
 
         const availability = await fetchChatbotAvailability({ correlationId: input.correlationId, day, mode });
         const hasAvailabilityData = availability.status === 'ok';
-        const availableHours = hasAvailabilityData ? availability.result.hours24 : [];
+        const availableSlots = hasAvailabilityData ? availability.result.slots : [];
         const profileWithAvailability = {
           ...profile,
-          appointmentAvailableHours: availableHours,
+          appointmentAvailableHours: availableSlots,
         };
 
-        if (hasAvailabilityData && availableHours.length === 0) {
+        if (hasAvailabilityData && availableSlots.length === 0) {
           conversationStore.set(key, {
             stage: 'awaiting_appointment_day',
             category: 'laboral',
@@ -2658,7 +2713,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
 
         return {
           responseText: hasAvailabilityData
-            ? `Ese horario ya no está disponible. ${buildAvailableHoursText(mode, availableHours)} Indica una de esas horas.`
+            ? `Ese horario ya no está disponible. ${buildAvailableHoursText(mode, availableSlots)} Indica una de esas horas.`
             : 'No pude confirmar la disponibilidad real en este momento. Escribe "cambiar día" y vuelve a intentarlo.',
           patch: {
             intent: 'consulta_laboral',
@@ -2674,6 +2729,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         mode: scheduled.result.mode,
         day: scheduled.result.day,
         hour24: scheduled.result.hour24,
+        minute: scheduled.result.minute,
         citaId: scheduled.result.citaId,
         assignedStudentName: scheduled.result.studentName,
         assignedStudentEmail: scheduled.result.studentEmail,
@@ -2696,6 +2752,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
           mode: scheduled.result.mode,
           day: scheduled.result.day,
           hour24: scheduled.result.hour24,
+          minute: scheduled.result.minute,
         })}
 
 ${scheduled.result.studentName ? `\n👩‍⚖️ Tu cita fue asignada a: *${scheduled.result.studentName}*.` : ''}
@@ -2933,6 +2990,7 @@ ${SURVEY_RATING_TEXT}`,
         mode: selected.mode,
         day: selected.day,
         hour24: selected.hour24,
+        minute: selected.minute,
       },
       appointmentEditOnly: true,
       rescheduleSelectedIndex: selectedNumber - 1,
@@ -2946,7 +3004,7 @@ ${SURVEY_RATING_TEXT}`,
     });
 
     return {
-      responseText: `Seleccionaste la cita #${selectedNumber}: ${formatWeekday(selected.day)} - ${formatHour(selected.hour24)} - ${selected.mode}.\n\n¿Qué dato deseas cambiar?\n1) modalidad\n2) dia\n3) hora`,
+      responseText: `Seleccionaste la cita #${selectedNumber}: ${formatWeekday(selected.day)} - ${formatHour(selected.hour24, selected.minute)} - ${selected.mode}.\n\n¿Qué dato deseas cambiar?\n1) modalidad\n2) dia\n3) hora`,
       patch: { intent: 'consulta_laboral', step: 'confirm_appointment', profile: nextProfile },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'reschedule_pick_ok' },
     };
@@ -3110,7 +3168,7 @@ ${SURVEY_RATING_TEXT}`,
     });
 
     return {
-      responseText: `✅ Tu cita fue cancelada con éxito.\n\n📅 ${formatWeekday(updated.day)}\n⏰ ${formatHour(updated.hour24)}\n📍 Modalidad ${updated.mode}\n\n${FOLLOWUP_HINT_TEXT}`,
+      responseText: `✅ Tu cita fue cancelada con éxito.\n\n📅 ${formatWeekday(updated.day)}\n⏰ ${formatHour(updated.hour24, updated.minute)}\n📍 Modalidad ${updated.mode}\n\n${FOLLOWUP_HINT_TEXT}`,
       patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'cancelled' },
     };
