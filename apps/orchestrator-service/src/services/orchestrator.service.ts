@@ -2813,9 +2813,19 @@ ${SURVEY_RATING_TEXT}`,
     if (input.rawText.trim().length > 0) {
       const baseProfile = state.profile ?? {};
       const initialQuery = input.rawText.trim();
+      const pendingClarification = typeof baseProfile.pendingClarification === 'string'
+        ? baseProfile.pendingClarification.trim()
+        : '';
       const inferredInitialCaseType = inferCaseTypeFromText(initialQuery);
+      const inferredPendingCaseType = pendingClarification
+        ? inferCaseTypeFromText(pendingClarification)
+        : undefined;
+      const shouldMergeWithPending = Boolean(pendingClarification) && isCaseTypeOnlyInput(initialQuery);
+      const queryForResolution = shouldMergeWithPending
+        ? `${pendingClarification}\n\nTipo de caso indicado por el usuario: ${initialQuery}`
+        : initialQuery;
 
-      if (!hasLaborEvidence(initialQuery) && !inferredInitialCaseType) {
+      if (!hasLaborEvidence(queryForResolution) && !inferCaseTypeFromText(queryForResolution)) {
         return {
           responseText: 'Para orientarte mejor, indícame primero el tipo de caso (laboral, familia, penal, civil, etc.) y un breve resumen en texto de lo ocurrido.',
           patch: {
@@ -2837,10 +2847,10 @@ ${SURVEY_RATING_TEXT}`,
 
       const pendingCaseType = typeof baseProfile.pendingCaseType === 'string'
         ? baseProfile.pendingCaseType
-        : inferredInitialCaseType;
+        : (inferredPendingCaseType || inferredInitialCaseType);
 
       const rag = await resolveLaboralQuery({
-        queryText: initialQuery,
+        queryText: queryForResolution,
         correlationId: input.correlationId,
         tenantId: input.messageIn.tenantId,
         conversationId: input.conversationId,
@@ -2852,6 +2862,7 @@ ${SURVEY_RATING_TEXT}`,
         lastLaboralQuery: rag.queryUsed,
         lastRagNoSupport: rag.noSupport,
         pendingCaseType: rag.noSupport ? (rag.inferredCaseType || pendingCaseType || undefined) : undefined,
+        pendingClarification: undefined,
       });
 
       conversationStore.set(key, {
@@ -3591,8 +3602,13 @@ function inferCaseTypeFromText(text: string): string | undefined {
         'hurto',
         'fiscalia',
         'violacion',
+        'violo',
+        'me violo',
+        'me violaron',
+        'violaron',
         'violar',
         'abuso sexual',
+        'abuso',
         'agresion sexual',
         'acoso sexual',
         'violencia sexual',
@@ -3640,6 +3656,24 @@ function inferCaseTypeFromText(text: string): string | undefined {
   }
 
   return undefined;
+}
+
+function isCaseTypeOnlyInput(text: string): boolean {
+  const normalized = normalizeForMatch(text);
+  const compact = normalized.replace(/\s+/g, ' ').trim();
+  return [
+    'laboral',
+    'penal',
+    'civil',
+    'familia',
+    'constitucional',
+    'administrativo',
+    'conciliacion',
+    'transito',
+    'disciplinario',
+    'responsabilidad fiscal',
+    'comercial',
+  ].includes(compact);
 }
 
 function inferCaseTypeLabel(query: string, _answer: string): string | undefined {
@@ -3724,9 +3758,9 @@ function buildClarifyingQuestions(caseType?: string): string {
 
 function buildNoContentFallback(caseType?: string): string {
   if (caseType) {
-    return `No encontré suficiente contenido del consultorio para responder con seguridad este caso de ${caseType.toLowerCase()}. Si quieres, dame más detalles y lo intento de nuevo.`;
+    return `Lo siento, no puedo atender esta consulta de ${caseType.toLowerCase()} con la información disponible del consultorio jurídico.`;
   }
-  return RAG_NO_CONTENT_FALLBACK;
+  return 'Lo siento, no puedo atender esa consulta con la información disponible del consultorio jurídico.';
 }
 
 function buildGeneralGuidanceByCaseType(caseType?: string): string {
