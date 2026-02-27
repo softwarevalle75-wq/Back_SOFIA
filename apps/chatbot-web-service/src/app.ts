@@ -22,5 +22,13 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'chatbot-web-service', timestamp: new Date().toISOString() });
 });
 
+app.get('/', (_req, res) => {
+  res.status(200).json({
+    success: true,
+    service: 'chatbot-web-service',
+    message: 'API del chatbot web activa. Usa /health o POST /v1/chatbot/web/message.',
+  });
+});
+
 app.use('/v1', v1Router);
 app.use(errorHandler);

@@ -6,8 +6,11 @@ Este servicio recibe mensajes del frontend web y los reenvia al `orchestrator-se
 
 ## Endpoints
 
+- `GET /` (info de servicio)
 - `GET /health`
 - `POST /v1/chatbot/web/message`
+
+> Nota: este microservicio es API, no interfaz de usuario. La UI publica del chatbot vive en el frontend (`/chatbot`).
 
 Payload esperado:
 
