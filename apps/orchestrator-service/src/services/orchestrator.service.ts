@@ -2822,7 +2822,7 @@ ${SURVEY_RATING_TEXT}`,
         : undefined;
       const shouldMergeWithPending = Boolean(pendingClarification) && isCaseTypeOnlyInput(initialQuery);
       const queryForResolution = shouldMergeWithPending
-        ? `${pendingClarification}\n\nTipo de caso indicado por el usuario: ${initialQuery}`
+        ? (inferredPendingCaseType ? pendingClarification : `${pendingClarification}\n\nTipo de caso indicado por el usuario: ${initialQuery}`)
         : initialQuery;
 
       if (!hasLaborEvidence(queryForResolution) && !inferCaseTypeFromText(queryForResolution)) {
@@ -3502,7 +3502,7 @@ function pickRagFallbackKind(result: RagAnswerResult): RagFallbackKind {
     || normalizedAnswer.includes('no encontre suficiente soporte');
 
   if (result.status === 'no_context' && result.citations.length === 0 && result.usedChunks.length === 0) {
-    return 'needs_context';
+    return 'no_content';
   }
 
   if (result.status === 'low_confidence') {
@@ -3511,13 +3511,13 @@ function pickRagFallbackKind(result: RagAnswerResult): RagFallbackKind {
       return 'none';
     }
     if (!hasEvidence) {
-      return 'needs_context';
+      return 'no_content';
     }
-    return 'needs_context';
+    return 'no_content';
   }
 
   if (noInfoAnswer) {
-    if (result.citations.length === 0 && result.usedChunks.length === 0) return 'needs_context';
+    if (result.citations.length === 0 && result.usedChunks.length === 0) return 'no_content';
     return 'none';
   }
 
@@ -3602,6 +3602,9 @@ function inferCaseTypeFromText(text: string): string | undefined {
         'hurto',
         'fiscalia',
         'violacion',
+        'violada',
+        'fue violada',
+        'violado',
         'violo',
         'me violo',
         'me violaron',
@@ -3783,6 +3786,7 @@ function isUrgentProtectionContext(query: string): boolean {
   const normalized = normalizeForMatch(query);
   return [
     'violacion',
+    'violada',
     'abuso sexual',
     'agresion sexual',
     'violencia sexual',
