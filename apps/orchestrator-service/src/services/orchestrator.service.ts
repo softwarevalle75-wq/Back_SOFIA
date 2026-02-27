@@ -2825,7 +2825,7 @@ ${SURVEY_RATING_TEXT}`,
         ? (inferredPendingCaseType ? pendingClarification : `${pendingClarification}\n\nTipo de caso indicado por el usuario: ${initialQuery}`)
         : initialQuery;
 
-      if (!hasLaborEvidence(queryForResolution) && !inferCaseTypeFromText(queryForResolution)) {
+      if (!inferCaseTypeFromText(queryForResolution)) {
         return {
           responseText: 'Para orientarte mejor, indícame primero el tipo de caso (laboral, familia, penal, civil, etc.) y un breve resumen en texto de lo ocurrido.',
           patch: {
@@ -3574,9 +3574,15 @@ function inferCaseTypeFromText(text: string): string | undefined {
       keys: [
         'laboral',
         'despido',
+        'despidieron',
+        'despedir',
+        'despedido',
+        'sin justa causa',
         'me echaron',
         'me saco de la empresa',
         'terminacion de contrato',
+        'terminacion unilateral',
+        'desvincularon',
         'terminaron mi contrato',
         'liquidacion',
         'empleador',
@@ -3628,9 +3634,12 @@ function inferCaseTypeFromText(text: string): string | undefined {
     },
     { label: 'Civil', keys: ['civil', 'jueces municipales', 'compraventa', 'arrendamiento', 'incumplimiento de contrato', 'deuda', 'pagare', 'pagaré'] },
     {
-      label: 'Familia',
+      label: 'Familia-alimentos',
       keys: [
         'familia',
+        'familia-alimentos',
+        'alimentos',
+        'cuota alimentaria',
         'patria potestad',
         'custodia',
         'comisarias de familia',
@@ -3669,6 +3678,7 @@ function isCaseTypeOnlyInput(text: string): boolean {
     'penal',
     'civil',
     'familia',
+    'familia-alimentos',
     'constitucional',
     'administrativo',
     'conciliacion',
@@ -3686,37 +3696,6 @@ function inferCaseTypeLabel(query: string, _answer: string): string | undefined 
   return undefined;
 }
 
-function hasLaborEvidence(text: string): boolean {
-  const normalized = normalizeForMatch(text);
-  return [
-    'trabajo',
-    'laboral',
-    'empleo',
-    'empleador',
-    'despido',
-    'echaron',
-    'me echaron',
-    'desvincularon',
-    'terminaron mi contrato',
-    'renuncia',
-    'liquidacion',
-    'liquidación',
-    'prestaciones',
-    'indemnizacion',
-    'no me pagan',
-    'no me pagaron',
-    'contrato de trabajo',
-    'salario',
-    'nomina',
-    'nómina',
-    'horas extra',
-    'incapacidad laboral',
-    'acoso laboral',
-    'arl',
-    'eps',
-  ].some((term) => normalized.includes(term));
-}
-
 function shouldUseQuickOrientation(query: string, caseType?: string): boolean {
   if (!caseType) return false;
   if (hasSpecificContextInQuery(query, caseType)) return false;
@@ -3724,11 +3703,15 @@ function shouldUseQuickOrientation(query: string, caseType?: string): boolean {
   return words.length <= 7;
 }
 
+function isFamilyCaseType(caseType?: string): boolean {
+  return caseType === 'Familia' || caseType === 'Familia-alimentos';
+}
+
 function buildNeedsContextFallback(caseType?: string): string {
   if (caseType === 'Laboral') {
     return 'Para orientarte mejor en este caso laboral, necesito algunos datos puntuales.';
   }
-  if (caseType === 'Familia') {
+  if (isFamilyCaseType(caseType)) {
     return 'Para orientarte bien en este caso de familia, necesito algunos datos puntuales.';
   }
   if (caseType === 'Penal') {
@@ -3744,7 +3727,7 @@ function buildNeedsContextFallback(caseType?: string): string {
 }
 
 function buildClarifyingQuestions(caseType?: string): string {
-  if (caseType === 'Familia') {
+  if (isFamilyCaseType(caseType)) {
     return 'Para darte una guía más útil, respóndeme estas preguntas rápidas:\n1) ¿El divorcio sería de mutuo acuerdo o hay conflicto?\n2) ¿Hay hijos menores o acuerdos de custodia/alimentos?\n3) ¿Hay bienes o deudas por repartir?\n\nCon esas respuestas te doy una ruta clara paso a paso.';
   }
   if (caseType === 'Laboral') {
@@ -3767,7 +3750,7 @@ function buildNoContentFallback(caseType?: string): string {
 }
 
 function buildGeneralGuidanceByCaseType(caseType?: string): string {
-  if (caseType === 'Familia') {
+  if (isFamilyCaseType(caseType)) {
     return 'Con lo que me compartes, en un caso de familia puedes empezar por reunir documentos clave (registro civil, pruebas de convivencia o de la situación) y definir si buscas conciliación o demanda según el objetivo (por ejemplo, divorcio, custodia o alimentos).';
   }
   if (caseType === 'Laboral') {
@@ -3827,7 +3810,7 @@ function hasSpecificContextInQuery(query: string, caseType?: string): boolean {
   if (words.length >= 12) return true;
   if (/\b\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?\b|\b\d+\b/.test(normalized)) return true;
 
-  if (caseType === 'Familia') {
+  if (isFamilyCaseType(caseType)) {
     return ['hijos', 'custodia', 'alimentos', 'bienes', 'deudas', 'mutuo acuerdo', 'violencia', 'separados']
       .some((k) => normalized.includes(k));
   }
