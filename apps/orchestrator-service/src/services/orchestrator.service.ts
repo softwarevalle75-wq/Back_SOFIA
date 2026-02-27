@@ -842,6 +842,15 @@ function markConsultationAsActive(profile: Record<string, unknown>): Record<stri
   };
 }
 
+function clearTransientConsultationProfile(profile: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...profile };
+  delete next.pendingCaseType;
+  delete next.pendingClarification;
+  delete next.lastRagNoSupport;
+  delete next.lastLaboralQuery;
+  return next;
+}
+
 function buildAppointmentListText(appointments: StoredAppointment[]): string {
   const lines = appointments.map((item, index) => {
     const statusLabel = item.status === 'cancelada' ? 'Cancelada' : 'Agendada';
@@ -1242,7 +1251,7 @@ async function resolveLaboralQuery(input: {
   try {
     const ragResult = await askRag(query, input.correlationId);
     const inferredFromRag = inferCaseTypeLabel(query, ragResult.answer);
-    const inferredCaseType = input.preferredCaseType || inferredFromRag;
+    const inferredCaseType = inferredFromRag || inferredFromQuery || input.preferredCaseType;
     const fallbackKind = pickRagFallbackKind(ragResult);
     const isNoSupport = fallbackKind !== 'none';
     const responseText = fallbackKind === 'none'
@@ -1287,7 +1296,7 @@ async function resolveLaboralQuery(input: {
       inferredCaseType,
     };
   } catch (error) {
-    const inferredCaseType = input.preferredCaseType || inferCaseTypeFromText(query);
+    const inferredCaseType = inferCaseTypeFromText(query) || input.preferredCaseType;
     log.warn(
       {
         correlationId: input.correlationId,
@@ -1377,7 +1386,7 @@ async function runStatefulFlow(input: {
   if (!state) {
     state = conversationStore.set(key, {
       ...defaultState(),
-      profile: input.contextProfile ?? {},
+      profile: clearTransientConsultationProfile((input.contextProfile ?? {}) as Record<string, unknown>),
     });
   } else {
     const hydratedProfile = hydrateAppointmentsFromContext(
@@ -1493,8 +1502,9 @@ async function runStatefulFlow(input: {
 
   if (state.stage === 'awaiting_policy_consent') {
     if (isPolicyAccepted(input.text)) {
+      const baseProfile = clearTransientConsultationProfile((state.profile ?? {}) as Record<string, unknown>);
       const nextProfile = {
-        ...(state.profile ?? {}),
+        ...baseProfile,
         policyAccepted: true,
       };
       conversationStore.set(key, {
@@ -2717,9 +2727,11 @@ ${SURVEY_RATING_TEXT}`,
 
   if (state.stage === 'awaiting_category') {
     if (isGreeting(input.text)) {
+      const nextProfile = clearTransientConsultationProfile((state.profile ?? {}) as Record<string, unknown>);
+      conversationStore.set(key, { stage: 'awaiting_category', category: undefined, profile: nextProfile });
       return {
         responseText: MENU_TEXT,
-        patch: { intent: 'general', step: 'ask_intent', profile: state.profile ?? {} },
+        patch: { intent: 'general', step: 'ask_intent', profile: nextProfile },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', category: 'intro' },
       };
     }
@@ -2845,9 +2857,9 @@ ${SURVEY_RATING_TEXT}`,
         };
       }
 
-      const pendingCaseType = typeof baseProfile.pendingCaseType === 'string'
-        ? baseProfile.pendingCaseType
-        : (inferredPendingCaseType || inferredInitialCaseType);
+      const pendingCaseType = inferredInitialCaseType
+        || inferredPendingCaseType
+        || (typeof baseProfile.pendingCaseType === 'string' ? baseProfile.pendingCaseType : undefined);
 
       const rag = await resolveLaboralQuery({
         queryText: queryForResolution,
@@ -3228,7 +3240,7 @@ ${SURVEY_RATING_TEXT}`,
     });
 
     const nextPendingCaseType = rag.noSupport
-      ? (rag.inferredCaseType || pendingCaseType || inferCaseTypeFromText(previousQuery) || undefined)
+      ? (rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || pendingCaseType || undefined)
       : undefined;
 
     const nextProfile = markConsultationAsActive({
