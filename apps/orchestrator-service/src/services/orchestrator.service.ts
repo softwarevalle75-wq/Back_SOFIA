@@ -1230,7 +1230,7 @@ async function resolveLaboralQuery(input: {
       responseText: truncateForWhatsapp(
         buildFriendlyOrientationResponse(
           buildGuidanceWithOptionalContext(inferredFromQuery),
-          buildClarifyingQuestions(inferredFromQuery),
+          buildClarifyingQuestions(inferredFromQuery, query),
         ),
       ),
       payload: {
@@ -1260,7 +1260,7 @@ async function resolveLaboralQuery(input: {
         ? buildFriendlyOrientationResponse(buildNoContentFallback(inferredCaseType))
         : buildFriendlyOrientationResponse(
           buildNeedsContextFallback(inferredCaseType),
-          buildClarifyingQuestions(inferredCaseType),
+          buildClarifyingQuestions(inferredCaseType, query),
         );
 
     log.info(
@@ -1313,7 +1313,7 @@ async function resolveLaboralQuery(input: {
     return {
       responseText: buildFriendlyOrientationResponse(
         buildRagServiceErrorFallback(query, inferredCaseType),
-        buildClarifyingQuestions(inferredCaseType),
+        buildClarifyingQuestions(inferredCaseType, query),
       ),
       payload: {
         correlationId: input.correlationId,
@@ -3738,7 +3738,16 @@ function buildNeedsContextFallback(caseType?: string): string {
   return 'Para orientarte mejor, necesito algunos datos puntuales del caso.';
 }
 
-function buildClarifyingQuestions(caseType?: string): string {
+function buildClarifyingQuestions(caseType?: string, queryText?: string): string {
+  const normalizedQuery = normalizeForMatch(queryText || '');
+  const isFamilyAlimony = isFamilyCaseType(caseType)
+    && ['alimentos', 'cuota alimentaria', 'cuota', 'incumplimiento de cuota', 'inasistencia alimentaria']
+      .some((term) => normalizedQuery.includes(term));
+
+  if (isFamilyAlimony) {
+    return 'Para orientarte mejor en cuota alimentaria, ayúdame con estos datos:\n1) ¿La cuota quedó fijada por juez, comisaría o acuerdo?\n2) ¿Desde cuándo hay incumplimiento y cuál es el valor adeudado aproximado?\n3) ¿Tienes soportes (acta, sentencia o comprobantes de pago/no pago)?\n\nCon eso te indico la ruta más adecuada para exigir el cumplimiento.';
+  }
+
   if (isFamilyCaseType(caseType)) {
     return 'Para darte una guía más útil, respóndeme estas preguntas rápidas:\n1) ¿El divorcio sería de mutuo acuerdo o hay conflicto?\n2) ¿Hay hijos menores o acuerdos de custodia/alimentos?\n3) ¿Hay bienes o deudas por repartir?\n\nCon esas respuestas te doy una ruta clara paso a paso.';
   }
@@ -3843,7 +3852,7 @@ function buildRagWhatsappText(result: RagAnswerResult, caseType?: string, queryT
     return truncateForWhatsapp(
       buildFriendlyOrientationResponse(
         buildNeedsContextFallback(caseType),
-        buildClarifyingQuestions(caseType),
+        buildClarifyingQuestions(caseType, queryText),
       ),
     );
   }
@@ -3962,7 +3971,7 @@ export const orchestratorService = {
               ? buildFriendlyOrientationResponse(buildNoContentFallback(inferredCaseType))
               : buildFriendlyOrientationResponse(
                 buildNeedsContextFallback(inferredCaseType),
-                buildClarifyingQuestions(inferredCaseType),
+                buildClarifyingQuestions(inferredCaseType, query),
               );
           responsePayload = {
             ...responsePayload,
@@ -3995,7 +4004,7 @@ export const orchestratorService = {
           const inferredCaseType = inferCaseTypeFromText(query);
           responseText = buildFriendlyOrientationResponse(
             buildRagServiceErrorFallback(query, inferredCaseType),
-            buildClarifyingQuestions(inferredCaseType),
+            buildClarifyingQuestions(inferredCaseType, query),
           );
           responsePayload = {
             ...responsePayload,
