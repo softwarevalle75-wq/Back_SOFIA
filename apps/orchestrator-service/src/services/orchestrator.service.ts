@@ -103,6 +103,12 @@ const ORIENTATION_DETAIL_PROMPT =
 
 const MENU_TEXT = `👋 ¡Bienvenido/a!\n\nSoy SOF-IA 🤖, tu asistente virtual del Consultorio Jurídico.\n\nPuedo orientarte de manera preliminar en temas como:\n\n⚖️ Laboral\n⚖️ Penal\n⚖️ Civil\n⚖️ Familia-alimentos\n⚖️ Constitucional\n⚖️ Administrativo\n⚖️ Conciliación\n⚖️ Tránsito\n⚖️ Disciplinario\n⚖️ Responsabilidad fiscal\n⚖️ Comercial\n\nCuéntame con tranquilidad tu caso o tu duda, y te acompañaré paso a paso 🤝`;
 
+const INCOHERENT_INPUT_TEXT =
+  'No logre entender tu mensaje. Por favor escribe una consulta juridica clara y coherente (que paso, cuando paso y en que area: penal, civil, familia, laboral, etc.).';
+
+const NON_LEGAL_INPUT_TEXT =
+  'Ese tema no corresponde a orientacion juridica del Consultorio. Puedo ayudarte solo con temas legales (penal, civil, familia, laboral, administrativo, conciliacion, entre otros).';
+
 type CompetenceStatus = 'competent' | 'not_competent' | 'unknown';
 
 type CompetenceAreaKey =
@@ -2998,6 +3004,48 @@ ${SURVEY_RATING_TEXT}`,
     if (input.rawText.trim().length > 0) {
       const baseProfile = state.profile ?? {};
       const initialQuery = input.rawText.trim();
+      const initialDomain = classifyInputDomain(initialQuery);
+
+      if (initialDomain === 'noise') {
+        return {
+          responseText: `${INCOHERENT_INPUT_TEXT}\n\nEjemplo: "Quiero denunciar violencia intrafamiliar" o "Tengo un proceso civil de 40 SMLV".`,
+          patch: {
+            intent: 'general',
+            step: 'ask_intent',
+            profile: {
+              ...baseProfile,
+              pendingClarification: initialQuery,
+            },
+          },
+          payload: {
+            orchestrator: true,
+            correlationId: input.correlationId,
+            flow: 'stateful',
+            inputQuality: 'noise',
+          },
+        };
+      }
+
+      if (initialDomain === 'non_legal') {
+        return {
+          responseText: `${NON_LEGAL_INPUT_TEXT}\n\nSi deseas, cuentame tu caso legal y te acompano paso a paso.`,
+          patch: {
+            intent: 'general',
+            step: 'ask_intent',
+            profile: {
+              ...baseProfile,
+              pendingClarification: initialQuery,
+            },
+          },
+          payload: {
+            orchestrator: true,
+            correlationId: input.correlationId,
+            flow: 'stateful',
+            inputQuality: 'non_legal',
+          },
+        };
+      }
+
       const directAssessment = assessCaseCompetence(initialQuery);
       if (directAssessment.status === 'not_competent' && directAssessment.areaKey && directAssessment.areaLabel) {
         const snapshot: CompetenceGateSnapshot = {
@@ -3436,6 +3484,24 @@ ${SURVEY_RATING_TEXT}`,
     const previousQuery = typeof profile.lastLaboralQuery === 'string' ? profile.lastLaboralQuery : '';
     const previousNoSupport = profile.lastRagNoSupport === true;
     const currentText = input.rawText.trim();
+    const currentDomain = classifyInputDomain(currentText);
+
+    if (currentDomain === 'noise') {
+      return {
+        responseText: `${INCOHERENT_INPUT_TEXT}\n\nPor favor intenta de nuevo con un mensaje claro sobre tu caso.`,
+        patch: { intent: 'consulta_laboral', step: 'ask_issue', profile },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', inputQuality: 'noise' },
+      };
+    }
+
+    if (currentDomain === 'non_legal') {
+      return {
+        responseText: `${NON_LEGAL_INPUT_TEXT}\n\nSi quieres continuar, escribeme un caso legal concreto y te ayudo.`,
+        patch: { intent: 'consulta_laboral', step: 'ask_issue', profile },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', inputQuality: 'non_legal' },
+      };
+    }
+
     const liveAssessment = assessCaseCompetence(currentText);
     if (liveAssessment.status === 'not_competent' && liveAssessment.areaKey && liveAssessment.areaLabel) {
       const snapshot: CompetenceGateSnapshot = {
@@ -3975,6 +4041,33 @@ function hasAnyKeyword(normalized: string, keywords: string[]): boolean {
   return keywords.some((keyword) => normalized.includes(keyword));
 }
 
+function classifyInputDomain(text: string): 'noise' | 'non_legal' | 'legal_or_unknown' {
+  const normalized = normalizeForMatch(text);
+
+  if (!normalized || normalized.length <= 1) return 'noise';
+  if (/^[\W_]+$/.test(normalized)) return 'noise';
+  if (/^(.)\1{4,}$/.test(normalized.replace(/\s+/g, ''))) return 'noise';
+  if (['xd', 'xddd', 'asdf', 'qwerty', '...', '..', '???', 'jaja', 'jeje', 'hola hola hola'].includes(normalized)) return 'noise';
+
+  if (inferCaseTypeFromText(text)) return 'legal_or_unknown';
+
+  const legalHints = [
+    'demanda', 'denuncia', 'querella', 'fiscalia', 'juez', 'juzgado', 'abogado', 'consultorio juridico',
+    'contrato', 'despido', 'salario', 'acoso laboral', 'tutela', 'desacato', 'comisaria', 'union marital',
+    'divorcio', 'sucesion', 'alimentos', 'comparendo', 'consumidor', 'recurso', 'peticion', 'queja', 'reclamacion',
+  ];
+  if (hasAnyKeyword(normalized, legalHints)) return 'legal_or_unknown';
+
+  const nonLegalHints = [
+    'me duele', 'dolor', 'rodilla', 'cabeza', 'fiebre', 'gripa', 'tos', 'medicina', 'medico', 'hospital', 'clinica',
+    'receta', 'vitamina', 'entrenamiento', 'gimnasio', 'dieta', 'comida', 'cocina', 'arroz', 'pizza',
+    'pelicula', 'serie', 'musica', 'videojuego', 'futbol', 'baloncesto', 'pronostico del tiempo', 'clima',
+  ];
+
+  if (hasAnyKeyword(normalized, nonLegalHints)) return 'non_legal';
+  return 'legal_or_unknown';
+}
+
 function extractSmlValue(text: string): number | undefined {
   const normalized = normalizeForMatch(text);
   const match = normalized.match(/(\d{1,4})\s*(smlv|smlmv|salarios?\s*minimos?)/);
@@ -4012,7 +4105,21 @@ function assessCaseCompetence(query: string, caseType?: string): CompetenceEvalu
   if (!areaKey) return { status: 'unknown' };
 
   if (areaKey === 'penal') {
-    if (hasAnyKeyword(normalized, ['extincion de dominio', 'enriquecimiento ilicito', 'extradicion', 'juez penal del circuito', 'juez penal especializado', 'corte suprema', 'sala de casacion penal'])) {
+    if (hasAnyKeyword(normalized, [
+      'extincion de dominio',
+      'enriquecimiento ilicito',
+      'extradicion',
+      'juez penal del circuito',
+      'juez de circuito',
+      'juez penal especializado',
+      'juez especializado',
+      'ante juez especializado',
+      'defensa de oficio',
+      'defensa de acusado',
+      'acusacion tribunal superior',
+      'corte suprema',
+      'sala de casacion penal',
+    ])) {
       return {
         status: 'not_competent',
         areaKey,
