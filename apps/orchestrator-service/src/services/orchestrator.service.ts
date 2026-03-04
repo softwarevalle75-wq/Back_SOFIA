@@ -34,7 +34,8 @@ type Step =
   | 'ask_appointment_mode'
   | 'ask_appointment_day'
   | 'ask_appointment_time'
-  | 'confirm_appointment';
+  | 'confirm_appointment'
+  | 'awaiting_competence_selection';
 
 interface OrchestratorContext {
   intent?: Intent;
@@ -101,6 +102,74 @@ const ORIENTATION_DETAIL_PROMPT =
   'Si deseas una orientación más específica, puedes enviarme información adicional en texto como:\n📅 Fechas importantes\n🧾 Qué ocurrió exactamente\n👥 Quiénes están involucrados\n🎯 Qué resultado esperas\n\nEntre más detalles me compartas, mejor podré orientarte.';
 
 const MENU_TEXT = `👋 ¡Bienvenido/a!\n\nSoy SOF-IA 🤖, tu asistente virtual del Consultorio Jurídico.\n\nPuedo orientarte de manera preliminar en temas como:\n\n⚖️ Laboral\n⚖️ Penal\n⚖️ Civil\n⚖️ Familia-alimentos\n⚖️ Constitucional\n⚖️ Administrativo\n⚖️ Conciliación\n⚖️ Tránsito\n⚖️ Disciplinario\n⚖️ Responsabilidad fiscal\n⚖️ Comercial\n\nCuéntame con tranquilidad tu caso o tu duda, y te acompañaré paso a paso 🤝`;
+
+type CompetenceStatus = 'competent' | 'not_competent' | 'unknown';
+
+type CompetenceAreaKey =
+  | 'penal'
+  | 'adm_const_disc_fiscal'
+  | 'civil'
+  | 'comercial'
+  | 'familia'
+  | 'conciliacion';
+
+type CompetenceOption = {
+  id: string;
+  label: string;
+  hints: string[];
+};
+
+type CompetenceGateSnapshot = {
+  areaKey: CompetenceAreaKey;
+  areaLabel: string;
+  options: CompetenceOption[];
+  reason: string;
+  lastUserText?: string;
+};
+
+type CompetenceEvaluation = {
+  status: CompetenceStatus;
+  areaKey?: CompetenceAreaKey;
+  areaLabel?: string;
+  reason?: string;
+};
+
+const COMPETENCE_OPTIONS_BY_AREA: Record<CompetenceAreaKey, CompetenceOption[]> = {
+  penal: [
+    { id: 'penal_victimas', label: 'Representacion de victimas y denuncias ante Fiscalia', hints: ['victima', 'fiscalia', 'denuncia', 'querella'] },
+    { id: 'penal_jueces_municipales', label: 'Defensa tecnica en procesos de jueces municipales o promiscuos', hints: ['juez municipal', 'promiscuo', 'defensa tecnica'] },
+    { id: 'penal_querellables', label: 'Asuntos querellables (injuria, calumnia, lesiones culposas, dano en bien ajeno)', hints: ['querellable', 'injuria', 'calumnia', 'lesiones', 'dano en bien ajeno'] },
+    { id: 'penal_vif', label: 'Violencia intrafamiliar con apoyo de comisaria de familia', hints: ['violencia intrafamiliar', 'violencia domestica', 'comisaria'] },
+    { id: 'penal_restaurativa', label: 'Justicia restaurativa y mediaciones', hints: ['justicia restaurativa', 'mediacion'] },
+  ],
+  adm_const_disc_fiscal: [
+    { id: 'tutela', label: 'Accion de tutela e incidente de desacato', hints: ['tutela', 'desacato'] },
+    { id: 'cumplimiento_popular', label: 'Acciones de cumplimiento y populares', hints: ['accion de cumplimiento', 'accion popular'] },
+    { id: 'fiscal', label: 'Responsabilidad fiscal ante contralorias', hints: ['responsabilidad fiscal', 'contraloria'] },
+    { id: 'disciplinario_general', label: 'Defensa en disciplinarios (excepto eleccion popular/direccion/confianza/manejo)', hints: ['disciplinario', 'procuraduria'] },
+    { id: 'administrativo_sancionatorio', label: 'Procedimientos administrativos sancionatorios', hints: ['superintendencia', 'sancionatorio', 'autoridad administrativa'] },
+    { id: 'pqr_recursos', label: 'Derechos de peticion, quejas, reclamaciones y recursos', hints: ['derecho de peticion', 'queja', 'reclamacion', 'recurso'] },
+    { id: 'transito_liviano', label: 'Transito cuando la sancion sea de baja cuantia (segun criterio institucional vigente)', hints: ['transito', 'comparendo', 'multa'] },
+  ],
+  civil: [
+    { id: 'civil_unica', label: 'Procesos de jueces civiles municipales de unica instancia', hints: ['civil municipal', 'unica instancia'] },
+    { id: 'civil_voluntaria', label: 'Jurisdiccion voluntaria (licencias y autorizaciones)', hints: ['jurisdiccion voluntaria', 'licencia', 'autorizacion'] },
+  ],
+  comercial: [
+    { id: 'consumidor', label: 'Acciones de proteccion al consumidor', hints: ['consumidor', 'proteccion al consumidor'] },
+  ],
+  familia: [
+    { id: 'familia_liquidacion_70', label: 'Liquidaciones de sociedades con activos hasta 70 SMLV', hints: ['liquidacion', '70 smlv'] },
+    { id: 'familia_unica', label: 'Procesos de unica instancia y comisaria de familia', hints: ['unica instancia', 'comisaria de familia'] },
+    { id: 'familia_inspeccion', label: 'Procesos ante inspecciones de policia', hints: ['inspeccion de policia'] },
+  ],
+  conciliacion: [
+    { id: 'conc_contratos', label: 'Conciliacion en contratos, letras de cambio y pagares', hints: ['contrato', 'letra de cambio', 'pagare'] },
+    { id: 'conc_rc', label: 'Conciliacion en responsabilidad civil', hints: ['responsabilidad civil'] },
+    { id: 'conc_familia', label: 'Conciliacion en asuntos de familia (alimentos, derechos del menor, union marital, disolucion)', hints: ['alimentos', 'derechos del menor', 'union marital', 'disolucion'] },
+    { id: 'conc_penal_querellable', label: 'Penal querellable en conciliacion (hasta 50 SMLMV)', hints: ['penal querellable', '50 smlmv', 'querella'] },
+  ],
+};
 
 function getDataPolicyText(channel: MessageIn['channel']): string {
   if (channel === 'telegram') return TELEGRAM_DATA_POLICY_TEXT;
@@ -1589,6 +1658,57 @@ async function runStatefulFlow(input: {
     ? (profile.appointmentUser as Record<string, unknown>)
     : {};
 
+  if (state.stage === 'awaiting_competence_selection') {
+    const snapshot = typeof profile.competenceGate === 'object' && profile.competenceGate !== null
+      ? (profile.competenceGate as CompetenceGateSnapshot)
+      : undefined;
+
+    if (!snapshot || !Array.isArray(snapshot.options) || snapshot.options.length === 0) {
+      conversationStore.set(key, {
+        stage: 'awaiting_category',
+        category: undefined,
+        profile,
+      });
+      return {
+        responseText: MENU_TEXT,
+        patch: { intent: 'general', step: 'ask_intent', profile },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', competenceGate: 'missing_snapshot' },
+      };
+    }
+
+    const selected = pickCompetenceOptionFromInput(input.rawText, snapshot);
+    if (!selected) {
+      return {
+        responseText: `${buildNotCompetentMessage(snapshot)}\n\nNo identifique una opcion valida. Elige un numero de la lista o describe una opcion atendible.`,
+        patch: { intent: 'consulta_laboral', step: 'awaiting_competence_selection', profile },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', competenceGate: 'selection_invalid' },
+      };
+    }
+
+    const nextProfile = {
+      ...profile,
+      competenceGate: undefined,
+      competenceArea: snapshot.areaLabel,
+      competenceSelection: selected.label,
+      competenceUnlockedAt: new Date().toISOString(),
+      pendingCaseType: snapshot.areaLabel,
+      lastLaboralQuery: `${selected.label}. ${input.rawText.trim()}`,
+      lastRagNoSupport: false,
+    };
+
+    conversationStore.set(key, {
+      stage: 'awaiting_question',
+      category: 'laboral',
+      profile: nextProfile,
+    });
+
+    return {
+      responseText: `Perfecto. ✅ Este asunto si esta dentro de nuestra competencia (${snapshot.areaLabel}).\n\nCuentame brevemente que ocurrio, cuando paso y que resultado esperas para orientarte mejor.`,
+      patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
+      payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', competenceGate: 'selection_ok', selectedOption: selected.id },
+    };
+  }
+
   if (state.category === 'laboral' && state.stage === 'awaiting_appointment_opt') {
     if (isScheduleAppointmentRequest(input.text) || isPositiveReply(input.text)) {
       const nextProfile = markConsultationAsCompleted(markConsultationAsActive(profile));
@@ -2878,6 +2998,43 @@ ${SURVEY_RATING_TEXT}`,
     if (input.rawText.trim().length > 0) {
       const baseProfile = state.profile ?? {};
       const initialQuery = input.rawText.trim();
+      const directAssessment = assessCaseCompetence(initialQuery);
+      if (directAssessment.status === 'not_competent' && directAssessment.areaKey && directAssessment.areaLabel) {
+        const snapshot: CompetenceGateSnapshot = {
+          areaKey: directAssessment.areaKey,
+          areaLabel: directAssessment.areaLabel,
+          options: COMPETENCE_OPTIONS_BY_AREA[directAssessment.areaKey],
+          reason: directAssessment.reason || 'El asunto indicado no esta dentro de la competencia institucional para esta ruta.',
+          lastUserText: initialQuery,
+        };
+        const nextProfile = {
+          ...baseProfile,
+          competenceGate: snapshot,
+        };
+
+        conversationStore.set(key, {
+          stage: 'awaiting_competence_selection',
+          category: 'laboral',
+          profile: nextProfile,
+        });
+
+        return {
+          responseText: buildNotCompetentMessage(snapshot),
+          patch: {
+            intent: 'consulta_laboral',
+            step: 'awaiting_competence_selection',
+            profile: nextProfile,
+          },
+          payload: {
+            orchestrator: true,
+            correlationId: input.correlationId,
+            flow: 'stateful',
+            competenceGate: 'blocked_not_competent',
+            area: directAssessment.areaLabel,
+          },
+        };
+      }
+
       const pendingClarification = typeof baseProfile.pendingClarification === 'string'
         ? baseProfile.pendingClarification.trim()
         : '';
@@ -3279,6 +3436,43 @@ ${SURVEY_RATING_TEXT}`,
     const previousQuery = typeof profile.lastLaboralQuery === 'string' ? profile.lastLaboralQuery : '';
     const previousNoSupport = profile.lastRagNoSupport === true;
     const currentText = input.rawText.trim();
+    const liveAssessment = assessCaseCompetence(currentText);
+    if (liveAssessment.status === 'not_competent' && liveAssessment.areaKey && liveAssessment.areaLabel) {
+      const snapshot: CompetenceGateSnapshot = {
+        areaKey: liveAssessment.areaKey,
+        areaLabel: liveAssessment.areaLabel,
+        options: COMPETENCE_OPTIONS_BY_AREA[liveAssessment.areaKey],
+        reason: liveAssessment.reason || 'El asunto indicado no esta dentro de la competencia institucional para esta ruta.',
+        lastUserText: currentText,
+      };
+      const nextProfile = {
+        ...profile,
+        competenceGate: snapshot,
+      };
+
+      conversationStore.set(key, {
+        stage: 'awaiting_competence_selection',
+        category: 'laboral',
+        profile: nextProfile,
+      });
+
+      return {
+        responseText: buildNotCompetentMessage(snapshot),
+        patch: {
+          intent: 'consulta_laboral',
+          step: 'awaiting_competence_selection',
+          profile: nextProfile,
+        },
+        payload: {
+          orchestrator: true,
+          correlationId: input.correlationId,
+          flow: 'stateful',
+          competenceGate: 'blocked_not_competent',
+          area: liveAssessment.areaLabel,
+        },
+      };
+    }
+
     const pendingCaseType = typeof profile.pendingCaseType === 'string' ? profile.pendingCaseType : undefined;
 
     const queryText = previousNoSupport && previousQuery
@@ -3753,6 +3947,185 @@ function isCaseTypeOnlyInput(text: string): boolean {
     'responsabilidad fiscal',
     'comercial',
   ].includes(compact);
+}
+
+function mapCaseTypeToCompetenceArea(caseType?: string): CompetenceAreaKey | undefined {
+  if (!caseType) return undefined;
+  if (caseType === 'Penal') return 'penal';
+  if (caseType === 'Civil') return 'civil';
+  if (caseType === 'Comercial') return 'comercial';
+  if (caseType === 'Familia' || caseType === 'Familia-alimentos') return 'familia';
+  if (caseType === 'Conciliación') return 'conciliacion';
+  if (caseType === 'Administrativo' || caseType === 'Constitucional' || caseType === 'Disciplinario' || caseType === 'Responsabilidad fiscal' || caseType === 'Tránsito') {
+    return 'adm_const_disc_fiscal';
+  }
+  return undefined;
+}
+
+function getCompetenceAreaLabel(areaKey: CompetenceAreaKey): string {
+  if (areaKey === 'penal') return 'Penal';
+  if (areaKey === 'civil') return 'Civil';
+  if (areaKey === 'comercial') return 'Comercial';
+  if (areaKey === 'familia') return 'Familia';
+  if (areaKey === 'conciliacion') return 'Conciliacion';
+  return 'Administrativo / Constitucional / Disciplinario / Fiscal';
+}
+
+function hasAnyKeyword(normalized: string, keywords: string[]): boolean {
+  return keywords.some((keyword) => normalized.includes(keyword));
+}
+
+function extractSmlValue(text: string): number | undefined {
+  const normalized = normalizeForMatch(text);
+  const match = normalized.match(/(\d{1,4})\s*(smlv|smlmv|salarios?\s*minimos?)/);
+  if (!match) return undefined;
+  const amount = Number.parseInt(match[1], 10);
+  return Number.isFinite(amount) ? amount : undefined;
+}
+
+function buildCompetenceOptionsList(options: CompetenceOption[]): string {
+  return options.map((option, index) => `${index + 1}) ${option.label}`).join('\n');
+}
+
+function buildNotCompetentMessage(snapshot: CompetenceGateSnapshot): string {
+  return `Gracias por la informacion. ⚠️ Por competencia, este caso no puede ser tramitado por el Consultorio Juridico.\n\nMotivo: ${snapshot.reason}\n\nSi podemos ayudarte en estos asuntos de *${snapshot.areaLabel}*:\n${buildCompetenceOptionsList(snapshot.options)}\n\nResponde con el numero de una opcion (por ejemplo: 1) o reformula tu caso segun una opcion atendible.`;
+}
+
+function pickCompetenceOptionFromInput(rawText: string, snapshot: CompetenceGateSnapshot): CompetenceOption | undefined {
+  const byNumber = pickOptionNumber(rawText);
+  if (byNumber && byNumber <= snapshot.options.length) {
+    return snapshot.options[byNumber - 1];
+  }
+
+  const normalized = normalizeForMatch(rawText);
+  return snapshot.options.find((option) => {
+    const normalizedLabel = normalizeForMatch(option.label);
+    if (normalizedLabel.includes(normalized) || normalized.includes(normalizedLabel)) return true;
+    return option.hints.some((hint) => normalized.includes(normalizeForMatch(hint)));
+  });
+}
+
+function assessCaseCompetence(query: string, caseType?: string): CompetenceEvaluation {
+  const normalized = normalizeForMatch(query);
+  const inferredCaseType = caseType || inferCaseTypeFromText(query);
+  const areaKey = mapCaseTypeToCompetenceArea(inferredCaseType);
+  if (!areaKey) return { status: 'unknown' };
+
+  if (areaKey === 'penal') {
+    if (hasAnyKeyword(normalized, ['extincion de dominio', 'enriquecimiento ilicito', 'extradicion', 'juez penal del circuito', 'juez penal especializado', 'corte suprema', 'sala de casacion penal'])) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'El asunto penal reportado esta fuera de la competencia del consultorio (circuito/especializado/casacion o materias excluidas).',
+      };
+    }
+    if (hasAnyKeyword(normalized, ['victima', 'fiscalia', 'querella', 'injuria', 'calumnia', 'lesiones', 'dano en bien ajeno', 'violencia intrafamiliar', 'justicia restaurativa'])) {
+      return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+  }
+
+  if (areaKey === 'civil') {
+    const sml = extractSmlValue(query);
+    if (sml !== undefined && sml > 70) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'En civil, la cuantia supera 70 SMLV, por lo que no es competencia del consultorio.',
+      };
+    }
+    if (hasAnyKeyword(normalized, ['juez civil del circuito'])) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'Los procesos ante juez civil del circuito no son competencia del consultorio.',
+      };
+    }
+    if (hasAnyKeyword(normalized, ['juez civil municipal', 'unica instancia', 'jurisdiccion voluntaria', 'licencia', 'autorizacion'])) {
+      return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+  }
+
+  if (areaKey === 'familia') {
+    if (hasAnyKeyword(normalized, ['divorcio', 'union marital de hecho'])) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'Divorcio civil y declaracion de union marital de hecho no se tramitan por esta via en consultorio.',
+      };
+    }
+    const sml = extractSmlValue(query);
+    if (sml !== undefined && sml > 70 && hasAnyKeyword(normalized, ['sucesion', 'masa sucesoral', 'liquidacion'])) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'En familia, cuando supera 70 SMLV para estos asuntos, no es competencia del consultorio.',
+      };
+    }
+    if (hasAnyKeyword(normalized, ['comisaria de familia', 'inspeccion de policia', 'cuota de alimentos', 'alimentos'])) {
+      return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+  }
+
+  if (areaKey === 'comercial') {
+    if (hasAnyKeyword(normalized, ['consumidor', 'proteccion al consumidor'])) {
+      return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    return {
+      status: 'not_competent',
+      areaKey,
+      areaLabel: getCompetenceAreaLabel(areaKey),
+      reason: 'En comercial, por esta via solo se atienden acciones de proteccion al consumidor.',
+    };
+  }
+
+  if (areaKey === 'conciliacion') {
+    if (hasAnyKeyword(normalized, ['divorcio', 'sucesion'])) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'En conciliacion, divorcios y sucesiones no se atienden por esta ruta.',
+      };
+    }
+    const sml = extractSmlValue(query);
+    if (hasAnyKeyword(normalized, ['penal', 'querella', 'querellable']) && sml !== undefined && sml > 50) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'En conciliacion penal querellable, la referencia supera 50 SMLMV.',
+      };
+    }
+    if (hasAnyKeyword(normalized, ['contrato', 'letra de cambio', 'pagare', 'responsabilidad civil', 'cuota de alimentos', 'derechos del menor', 'union marital', 'disolucion'])) {
+      return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+  }
+
+  if (areaKey === 'adm_const_disc_fiscal') {
+    if (hasAnyKeyword(normalized, ['funcionario de eleccion popular', 'direccion', 'confianza y manejo'])) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'Ese disciplinario especifico esta excluido por competencia institucional.',
+      };
+    }
+    if (hasAnyKeyword(normalized, ['tutela', 'desacato', 'accion de cumplimiento', 'accion popular', 'responsabilidad fiscal', 'contraloria', 'superintendencia', 'derecho de peticion', 'reclamacion', 'queja', 'recurso'])) {
+      return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+  }
+
+  return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
 }
 
 function inferCaseTypeLabel(query: string, _answer: string): string | undefined {

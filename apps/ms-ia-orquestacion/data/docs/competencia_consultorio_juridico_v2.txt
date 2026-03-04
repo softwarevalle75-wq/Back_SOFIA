@@ -1,0 +1,63 @@
+AREA: PENAL
+ASUNTOS QUE SI PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Representacion de victimas en procesos bajo Ley 906 de 2004 o Ley 600 de 2000, incluyendo denuncias y querellas ante Fiscalia.
+- Defensa tecnica en procesos penales de conocimiento de jueces municipales o promiscuos municipales.
+- Asuntos querellables: lesiones personales culposas, injuria, calumnia, dano en bien ajeno, entre otros.
+- Violencia intrafamiliar: asesoria y representacion en casos de violencia domestica junto con comisarias de familia.
+- Acciones de justicia restaurativa y mediaciones.
+ASUNTOS QUE NO PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Defensa de oficio de acusados en asuntos de jueces penales del circuito de conocimiento, jueces penales especializados, Sala de Decision Penal del Tribunal Superior de Bogota y Sala de Casacion Penal de la Corte Suprema de Justicia.
+- Procesos de extincion de dominio.
+- Procesos de enriquecimiento ilicito.
+- Procesos de extradicion.
+
+AREA: DERECHO ADMINISTRATIVO, DERECHO CONSTITUCIONAL, DERECHO DISCIPLINARIO, RESPONSABILIDAD FISCAL
+ASUNTOS QUE SI PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Elaboracion de accion de tutela.
+- Elaboracion de incidente de desacato.
+- Acciones de cumplimiento y populares.
+- Responsabilidad fiscal: actuaciones ante contralorias municipales, distritales, departamentales y general, sin restriccion de cuantia.
+- Disciplinarios: defensores de oficio en procesos disciplinarios (excepto procesos contra funcionarios de eleccion popular, direccion, confianza y manejo).
+- Procedimientos administrativos de caracter sancionatorio ante superintendencias, autoridades administrativas, organismos de control y entidades constitucionales autonomas.
+- Derechos de peticion, quejas y reclamaciones; actuaciones administrativas e interposicion de recursos en sede administrativa ante entidades publicas y privadas.
+- Procedimientos contravencionales de transito para asuntos con multa de baja cuantia, segun criterio institucional vigente.
+ASUNTOS QUE NO PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Procesos disciplinarios contra funcionarios de eleccion popular, direccion, confianza y manejo.
+- Procedimientos contravencionales de transito fuera del rango de cuantia permitido institucionalmente.
+
+AREA: DERECHOS CIVIL
+ASUNTOS QUE SI PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Procesos de competencia de jueces civiles municipales de unica instancia.
+- Procesos de jurisdiccion voluntaria, como licencias y autorizaciones.
+ASUNTOS QUE NO PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Procesos ante jueces civiles del circuito.
+- Procesos cuya cuantia supere 70 SMLV.
+
+AREA: COMERCIAL
+ASUNTOS QUE SI PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Solamente acciones de proteccion al consumidor.
+ASUNTOS QUE NO PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Cualquier asunto comercial distinto a proteccion al consumidor.
+
+AREA: FAMILIA
+ASUNTOS QUE SI PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Liquidaciones de sociedades cuyos activos no superen 70 SMLV.
+- Procesos de unica instancia.
+- Procesos ante comisaria de familia.
+- Procesos ante inspecciones de policia.
+ASUNTOS QUE NO PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Divorcio de matrimonio civil.
+- Declaracion de union marital de hecho (por esta ruta).
+- Sucesiones cuya masa sucesoral supere 70 SMLV.
+
+AREA: CONCILIACION EN ASUNTOS DE FAMILIA, CONTRATOS Y COMERCIAL
+ASUNTOS QUE SI PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Contratos.
+- Letras de cambio.
+- Pagares.
+- Responsabilidad civil.
+- Procesos de familia: fijacion de cuota de alimentos, derechos del menor, declaracion de union marital de hecho, liquidacion y disolucion de union marital, alimentos de adulto mayor.
+- En materia penal: asuntos querellables que no superen 50 SMLMV.
+ASUNTOS QUE NO PUEDEN TRAMITAR EN EL CONSULTORIO JURIDICO Y CENTRO DE CONCILIACION:
+- Divorcios.
+- Sucesiones.
