@@ -127,15 +127,13 @@ async function runLockedAreaRegression(index: number): Promise<{ ok: boolean; de
   const blockedOk = /no puede ser tramitado por el consultorio juridico/i.test(blocked.responseText);
   const optionOk = /este asunto si esta dentro de nuestra competencia/i.test(pickOption.responseText);
   const noLaboralLabel = !/tipo de caso:\s*laboral/i.test(followup.responseText);
-  const warnsAreaSwitch = /ruta de \*familia\*|si deseas cambiar de area, escribe \*reset\*/i.test(followup.responseText);
 
   details.push(`blocked_ok=${blockedOk ? 'yes' : 'no'}`);
   details.push(`option_ok=${optionOk ? 'yes' : 'no'}`);
   details.push(`no_laboral_label_after_lock=${noLaboralLabel ? 'yes' : 'no'}`);
-  details.push(`warns_area_switch_with_reset=${warnsAreaSwitch ? 'yes' : 'no'}`);
 
   return {
-    ok: blockedOk && optionOk && noLaboralLabel && warnsAreaSwitch,
+    ok: blockedOk && optionOk && noLaboralLabel,
     details,
   };
 }
@@ -236,14 +234,31 @@ async function runCompetentAppointmentAvailabilityRegression(index: number): Pro
 
   await bootstrapConversation(externalUserId, conversationId);
 
-  const competent = await sendMessage({
+  const blocked = await sendMessage({
     externalUserId,
     conversationId,
-    correlationId: `${conversationId}-competent`,
-    text: 'fui victima de lesiones y ya denuncie en fiscalia, es competencia?',
+    correlationId: `${conversationId}-blocked`,
+    text: 'es un divorcio civil',
   });
 
-  const canSeeAppointmentOption = /si, deseo agendar una cita/i.test(competent.responseText);
+  const selectCompetent = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-select`,
+    text: '1',
+  });
+
+  const competentDecisionWithoutAppointment = /este asunto si esta dentro de nuestra competencia/i.test(selectCompetent.responseText)
+    && !/si, deseo agendar una cita/i.test(selectCompetent.responseText);
+
+  const orientation = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-orientation`,
+    text: 'quiero liquidaciones de sociedades con activos hasta 70 SMLV',
+  });
+
+  const canSeeAppointmentOption = /si, deseo agendar una cita/i.test(orientation.responseText);
 
   const startAppointment = await sendMessage({
     externalUserId,
@@ -254,11 +269,13 @@ async function runCompetentAppointmentAvailabilityRegression(index: number): Pro
 
   const startsDataCollection = /antes de agendar la cita te pido unos datos rapidos|empecemos con tu nombre completo/i.test(startAppointment.responseText);
 
+  details.push(`blocked_initially=${/no puede ser tramitado por el consultorio juridico/i.test(blocked.responseText) ? 'yes' : 'no'}`);
+  details.push(`competent_decision_without_appointment=${competentDecisionWithoutAppointment ? 'yes' : 'no'}`);
   details.push(`can_see_appointment_option=${canSeeAppointmentOption ? 'yes' : 'no'}`);
   details.push(`can_start_appointment_flow=${startsDataCollection ? 'yes' : 'no'}`);
 
   return {
-    ok: canSeeAppointmentOption && startsDataCollection,
+    ok: competentDecisionWithoutAppointment && startsDataCollection,
     details,
   };
 }

@@ -1766,7 +1766,7 @@ async function runStatefulFlow(input: {
     });
 
     return {
-      responseText: `Perfecto. ✅ Este asunto si esta dentro de nuestra competencia (${snapshot.areaLabel}).\n\nCuentame brevemente que ocurrio, cuando paso y que resultado esperas para orientarte mejor.\n\n${APPOINTMENT_OFFER_TEXT}`,
+      responseText: `Perfecto. ✅ Este asunto si esta dentro de nuestra competencia (${snapshot.areaLabel}).\n\nCuentame brevemente que ocurrio, cuando paso y que resultado esperas para orientarte mejor.`,
       patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', competenceGate: 'selection_ok', selectedOption: selected.id },
     };
@@ -3629,23 +3629,6 @@ ${SURVEY_RATING_TEXT}`,
     const lockedCaseType = typeof profile.competenceLockedCaseType === 'string'
       ? profile.competenceLockedCaseType
       : undefined;
-    const inferredIncomingCaseType = inferCaseTypeFromText(currentText);
-    const lockedAreaSwitchHint = buildLockedAreaSwitchHint(lockedCaseType, inferredIncomingCaseType);
-
-    if (lockedCaseType && lockedAreaSwitchHint) {
-      return {
-        responseText: `${lockedAreaSwitchHint}\n\nSi prefieres seguir en la ruta actual, cuentame mas detalles del mismo caso (hecho principal, fecha y resultado esperado).`,
-        patch: { intent: 'consulta_laboral', step: 'ask_issue', profile },
-        payload: {
-          orchestrator: true,
-          correlationId: input.correlationId,
-          flow: 'stateful',
-          lockedCaseType,
-          incomingCaseType: inferredIncomingCaseType ?? null,
-          lockedAreaGuard: 'cross_area_blocked',
-        },
-      };
-    }
 
     const rememberedCaseType = typeof profile.detectedCaseType === 'string'
       ? profile.detectedCaseType
@@ -3815,8 +3798,15 @@ ${SURVEY_RATING_TEXT}`,
       category: 'laboral',
       profile: nextProfile,
     });
+
+    const shouldOfferAppointment = hasPositiveCompetence(nextProfile)
+      && !/si, deseo agendar una cita/i.test(rag.responseText);
+    const responseWithOptionalAppointment = shouldOfferAppointment
+      ? `${rag.responseText}\n\n${APPOINTMENT_OFFER_TEXT}`
+      : rag.responseText;
+
     return {
-      responseText: rag.responseText,
+      responseText: responseWithOptionalAppointment,
       patch: {
         intent: 'consulta_laboral',
         step: 'ask_issue',
@@ -4377,17 +4367,7 @@ function isCompetenceFollowUpQuestion(text: string): boolean {
 }
 
 function buildCompetentDecisionMessage(areaLabel: string): string {
-  return `Gracias por la informacion. ✅ Por competencia, este caso SI puede ser orientado por el Consultorio Juridico en el area de *${areaLabel}*.\n\nSi deseas, te doy una ruta inicial de accion y los siguientes pasos recomendados para tu caso.\n\n${APPOINTMENT_OFFER_TEXT}`;
-}
-
-function buildLockedAreaSwitchHint(lockedCaseType?: string, incomingCaseType?: string): string {
-  const lockedArea = mapCaseTypeToCompetenceArea(lockedCaseType);
-  const incomingArea = mapCaseTypeToCompetenceArea(incomingCaseType);
-  if (!lockedArea || !incomingArea || lockedArea === incomingArea) return '';
-
-  const lockedLabel = getCompetenceAreaLabel(lockedArea);
-  const incomingLabel = getCompetenceAreaLabel(incomingArea);
-  return `En este momento tu consulta sigue en la ruta de *${lockedLabel}*. El mensaje parece de *${incomingLabel}*. Si deseas cambiar de area, escribe *reset* y describe tu nuevo caso.`;
+  return `Gracias por la informacion. ✅ Por competencia, este caso SI puede ser orientado por el Consultorio Juridico en el area de *${areaLabel}*.\n\nSi deseas, te doy una ruta inicial de accion y los siguientes pasos recomendados para tu caso.`;
 }
 
 function responseLooksInconsistentWithLockedCaseType(responseText: string, lockedCaseType?: string): boolean {
