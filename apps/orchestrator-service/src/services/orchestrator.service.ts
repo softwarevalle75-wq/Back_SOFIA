@@ -3802,7 +3802,9 @@ ${SURVEY_RATING_TEXT}`,
     const shouldOfferAppointment = hasPositiveCompetence(nextProfile)
       && !/si, deseo agendar una cita/i.test(rag.responseText);
     const responseWithOptionalAppointment = shouldOfferAppointment
-      ? `${rag.responseText}\n\n${APPOINTMENT_OFFER_TEXT}`
+      ? (rag.responseText.includes(FOLLOWUP_HINT_TEXT)
+        ? rag.responseText.replace(FOLLOWUP_HINT_TEXT, FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS)
+        : `${rag.responseText}\n\n${APPOINTMENT_OFFER_TEXT}`)
       : rag.responseText;
 
     return {

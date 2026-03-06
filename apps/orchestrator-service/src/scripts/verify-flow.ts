@@ -259,6 +259,7 @@ async function runCompetentAppointmentAvailabilityRegression(index: number): Pro
   });
 
   const canSeeAppointmentOption = /si, deseo agendar una cita/i.test(orientation.responseText);
+  const isOrientationCard = /que deseas hacer ahora\?/i.test(orientation.responseText);
 
   const startAppointment = await sendMessage({
     externalUserId,
@@ -271,11 +272,12 @@ async function runCompetentAppointmentAvailabilityRegression(index: number): Pro
 
   details.push(`blocked_initially=${/no puede ser tramitado por el consultorio juridico/i.test(blocked.responseText) ? 'yes' : 'no'}`);
   details.push(`competent_decision_without_appointment=${competentDecisionWithoutAppointment ? 'yes' : 'no'}`);
+  details.push(`orientation_card_detected=${isOrientationCard ? 'yes' : 'no'}`);
   details.push(`can_see_appointment_option=${canSeeAppointmentOption ? 'yes' : 'no'}`);
   details.push(`can_start_appointment_flow=${startsDataCollection ? 'yes' : 'no'}`);
 
   return {
-    ok: competentDecisionWithoutAppointment && startsDataCollection,
+    ok: competentDecisionWithoutAppointment && (!isOrientationCard || canSeeAppointmentOption) && startsDataCollection,
     details,
   };
 }
