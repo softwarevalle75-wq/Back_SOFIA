@@ -978,6 +978,15 @@ function followupHintForProfile(profile: Record<string, unknown>): string {
   return hasPositiveCompetence(profile) ? FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS : FOLLOWUP_HINT_TEXT;
 }
 
+function attachAppointmentOfferToOrientationResponse(responseText: string, profile: Record<string, unknown>): string {
+  if (!hasPositiveCompetence(profile)) return responseText;
+  if (/si, deseo agendar una cita/i.test(responseText)) return responseText;
+  if (responseText.includes(FOLLOWUP_HINT_TEXT)) {
+    return responseText.replace(FOLLOWUP_HINT_TEXT, FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS);
+  }
+  return `${responseText}\n\n${APPOINTMENT_OFFER_TEXT}`;
+}
+
 function buildAppointmentListText(appointments: StoredAppointment[]): string {
   const lines = appointments.map((item, index) => {
     const statusLabel = item.status === 'cancelada' ? 'Cancelada' : 'Agendada';
@@ -3243,13 +3252,15 @@ ${SURVEY_RATING_TEXT}`,
 
       const nextProfile = markConsultationAsActive({
         ...baseProfile,
-        competenceStatus: hasPositiveCompetence(baseProfile) ? 'competent' : 'unknown',
+        competenceStatus: directAssessment.status === 'competent' || hasPositiveCompetence(baseProfile) ? 'competent' : 'unknown',
         lastLaboralQuery: rag.queryUsed,
         lastRagNoSupport: rag.noSupport,
         detectedCaseType: inferredInitialCaseType || inferredPendingCaseType || pendingCaseType,
         pendingCaseType: rag.noSupport ? (rag.inferredCaseType || pendingCaseType || undefined) : undefined,
         pendingClarification: undefined,
       });
+
+      const responseWithOptionalAppointment = attachAppointmentOfferToOrientationResponse(rag.responseText, nextProfile);
 
       conversationStore.set(key, {
         stage: 'awaiting_question',
@@ -3258,7 +3269,7 @@ ${SURVEY_RATING_TEXT}`,
       });
 
       return {
-        responseText: rag.responseText,
+        responseText: responseWithOptionalAppointment,
         patch: {
           intent: 'consulta_laboral',
           step: 'ask_issue',
@@ -3786,7 +3797,7 @@ ${SURVEY_RATING_TEXT}`,
 
     const nextProfile = markConsultationAsActive({
       ...profile,
-      competenceStatus: hasPositiveCompetence(profile) ? 'competent' : 'unknown',
+      competenceStatus: liveAssessment.status === 'competent' || hasPositiveCompetence(profile) ? 'competent' : 'unknown',
       lastLaboralQuery: rag.queryUsed,
       lastRagNoSupport: rag.noSupport,
       detectedCaseType: lockedCaseType || rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || rememberedCaseType,
@@ -3799,13 +3810,7 @@ ${SURVEY_RATING_TEXT}`,
       profile: nextProfile,
     });
 
-    const shouldOfferAppointment = hasPositiveCompetence(nextProfile)
-      && !/si, deseo agendar una cita/i.test(rag.responseText);
-    const responseWithOptionalAppointment = shouldOfferAppointment
-      ? (rag.responseText.includes(FOLLOWUP_HINT_TEXT)
-        ? rag.responseText.replace(FOLLOWUP_HINT_TEXT, FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS)
-        : `${rag.responseText}\n\n${APPOINTMENT_OFFER_TEXT}`)
-      : rag.responseText;
+    const responseWithOptionalAppointment = attachAppointmentOfferToOrientationResponse(rag.responseText, nextProfile);
 
     return {
       responseText: responseWithOptionalAppointment,
