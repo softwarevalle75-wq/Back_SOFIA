@@ -112,6 +112,7 @@ const NON_LEGAL_INPUT_TEXT =
 type CompetenceStatus = 'competent' | 'not_competent' | 'unknown';
 
 type CompetenceAreaKey =
+  | 'laboral'
   | 'penal'
   | 'adm_const_disc_fiscal'
   | 'civil'
@@ -141,6 +142,11 @@ type CompetenceEvaluation = {
 };
 
 const COMPETENCE_OPTIONS_BY_AREA: Record<CompetenceAreaKey, CompetenceOption[]> = {
+  laboral: [
+    { id: 'lab_despido', label: 'Despido, terminacion de contrato, liquidacion e indemnizacion', hints: ['despido', 'terminacion', 'liquidacion', 'indemnizacion'] },
+    { id: 'lab_pagos', label: 'Salarios, prestaciones, horas extras y recargos', hints: ['salario', 'prestaciones', 'horas extras', 'recargos'] },
+    { id: 'lab_acoso', label: 'Acoso laboral y vulneraciones en el trabajo', hints: ['acoso laboral', 'hostigamiento', 'maltrato laboral'] },
+  ],
   penal: [
     { id: 'penal_victimas', label: 'Representacion de victimas y denuncias ante Fiscalia', hints: ['victima', 'fiscalia', 'denuncia', 'querella'] },
     { id: 'penal_jueces_municipales', label: 'Defensa tecnica en procesos de jueces municipales o promiscuos', hints: ['juez municipal', 'promiscuo', 'defensa tecnica'] },
@@ -3046,7 +3052,8 @@ ${SURVEY_RATING_TEXT}`,
         };
       }
 
-      const directAssessment = assessCaseCompetence(initialQuery);
+      const inferredInitialCaseType = inferCaseTypeFromText(initialQuery);
+      const directAssessment = assessCaseCompetence(initialQuery, inferredInitialCaseType);
       if (directAssessment.status === 'not_competent' && directAssessment.areaKey && directAssessment.areaLabel) {
         const snapshot: CompetenceGateSnapshot = {
           areaKey: directAssessment.areaKey,
@@ -3083,10 +3090,63 @@ ${SURVEY_RATING_TEXT}`,
         };
       }
 
+      if (directAssessment.status === 'competent' && directAssessment.areaLabel && isCompetenceFollowUpQuestion(initialQuery)) {
+        const nextProfile = {
+          ...baseProfile,
+          pendingClarification: undefined,
+          pendingCaseType: inferredInitialCaseType,
+          detectedCaseType: inferredInitialCaseType,
+        };
+
+        conversationStore.set(key, {
+          stage: 'awaiting_question',
+          category: 'laboral',
+          profile: nextProfile,
+        });
+
+        return {
+          responseText: buildCompetentDecisionMessage(directAssessment.areaLabel),
+          patch: {
+            intent: 'consulta_laboral',
+            step: 'ask_issue',
+            profile: nextProfile,
+          },
+          payload: {
+            orchestrator: true,
+            correlationId: input.correlationId,
+            flow: 'stateful',
+            competenceGate: 'allowed_competent',
+            area: directAssessment.areaLabel,
+          },
+        };
+      }
+
+      if (directAssessment.status === 'unknown' && isCompetenceFollowUpQuestion(initialQuery)) {
+        return {
+          responseText: buildCompetenceNeedDetailsMessage(directAssessment.areaLabel),
+          patch: {
+            intent: 'consulta_laboral',
+            step: 'ask_issue',
+            profile: {
+              ...baseProfile,
+              pendingClarification: initialQuery,
+              pendingCaseType: inferredInitialCaseType,
+              detectedCaseType: inferredInitialCaseType,
+            },
+          },
+          payload: {
+            orchestrator: true,
+            correlationId: input.correlationId,
+            flow: 'stateful',
+            competenceGate: 'need_more_detail',
+            area: directAssessment.areaLabel || null,
+          },
+        };
+      }
+
       const pendingClarification = typeof baseProfile.pendingClarification === 'string'
         ? baseProfile.pendingClarification.trim()
         : '';
-      const inferredInitialCaseType = inferCaseTypeFromText(initialQuery);
       const inferredPendingCaseType = pendingClarification
         ? inferCaseTypeFromText(pendingClarification)
         : undefined;
@@ -3131,6 +3191,7 @@ ${SURVEY_RATING_TEXT}`,
         ...baseProfile,
         lastLaboralQuery: rag.queryUsed,
         lastRagNoSupport: rag.noSupport,
+        detectedCaseType: inferredInitialCaseType || inferredPendingCaseType || pendingCaseType,
         pendingCaseType: rag.noSupport ? (rag.inferredCaseType || pendingCaseType || undefined) : undefined,
         pendingClarification: undefined,
       });
@@ -3473,14 +3534,6 @@ ${SURVEY_RATING_TEXT}`,
       };
     }
 
-    if (!env.ORCH_RAG_ENABLED) {
-      return {
-        responseText: 'El modo de consulta jurídica está desactivado temporalmente. Intenta en unos minutos.',
-        patch: { intent: 'consulta_laboral', step: 'ask_issue', profile },
-        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', ragEnabled: false },
-      };
-    }
-
     const previousQuery = typeof profile.lastLaboralQuery === 'string' ? profile.lastLaboralQuery : '';
     const previousNoSupport = profile.lastRagNoSupport === true;
     const currentText = input.rawText.trim();
@@ -3502,14 +3555,20 @@ ${SURVEY_RATING_TEXT}`,
       };
     }
 
-    const liveAssessment = assessCaseCompetence(currentText);
+    const rememberedCaseType = typeof profile.detectedCaseType === 'string'
+      ? profile.detectedCaseType
+      : (typeof profile.pendingCaseType === 'string' ? profile.pendingCaseType : undefined);
+    const assessmentSource = isCompetenceFollowUpQuestion(currentText) && previousQuery
+      ? `${previousQuery}\n\nPregunta del usuario: ${currentText}`
+      : currentText;
+    const liveAssessment = assessCaseCompetence(assessmentSource, rememberedCaseType);
     if (liveAssessment.status === 'not_competent' && liveAssessment.areaKey && liveAssessment.areaLabel) {
       const snapshot: CompetenceGateSnapshot = {
         areaKey: liveAssessment.areaKey,
         areaLabel: liveAssessment.areaLabel,
         options: COMPETENCE_OPTIONS_BY_AREA[liveAssessment.areaKey],
         reason: liveAssessment.reason || 'El asunto indicado no esta dentro de la competencia institucional para esta ruta.',
-        lastUserText: currentText,
+        lastUserText: assessmentSource,
       };
       const nextProfile = {
         ...profile,
@@ -3539,7 +3598,66 @@ ${SURVEY_RATING_TEXT}`,
       };
     }
 
+    if (liveAssessment.status === 'competent' && liveAssessment.areaLabel && isCompetenceFollowUpQuestion(currentText)) {
+      const nextProfile = markConsultationAsActive({
+        ...profile,
+        detectedCaseType: rememberedCaseType || inferCaseTypeFromText(previousQuery) || inferCaseTypeFromText(currentText),
+      });
+
+      conversationStore.set(key, {
+        stage: 'awaiting_question',
+        category: 'laboral',
+        profile: nextProfile,
+      });
+
+      return {
+        responseText: buildCompetentDecisionMessage(liveAssessment.areaLabel),
+        patch: {
+          intent: 'consulta_laboral',
+          step: 'ask_issue',
+          profile: nextProfile,
+        },
+        payload: {
+          orchestrator: true,
+          correlationId: input.correlationId,
+          flow: 'stateful',
+          competenceGate: 'allowed_competent',
+          area: liveAssessment.areaLabel,
+        },
+      };
+    }
+
+    if (liveAssessment.status === 'unknown' && isCompetenceFollowUpQuestion(currentText)) {
+      return {
+        responseText: buildCompetenceNeedDetailsMessage(liveAssessment.areaLabel),
+        patch: {
+          intent: 'consulta_laboral',
+          step: 'ask_issue',
+          profile: markConsultationAsActive({
+            ...profile,
+            pendingCaseType: rememberedCaseType,
+            detectedCaseType: rememberedCaseType,
+          }),
+        },
+        payload: {
+          orchestrator: true,
+          correlationId: input.correlationId,
+          flow: 'stateful',
+          competenceGate: 'need_more_detail',
+          area: liveAssessment.areaLabel || null,
+        },
+      };
+    }
+
     const pendingCaseType = typeof profile.pendingCaseType === 'string' ? profile.pendingCaseType : undefined;
+
+    if (!env.ORCH_RAG_ENABLED) {
+      return {
+        responseText: 'El modo de consulta jurídica está desactivado temporalmente. Intenta en unos minutos.',
+        patch: { intent: 'consulta_laboral', step: 'ask_issue', profile },
+        payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', ragEnabled: false },
+      };
+    }
 
     const queryText = previousNoSupport && previousQuery
       ? `${previousQuery}\n\nDetalles adicionales del usuario: ${currentText}`
@@ -3561,6 +3679,7 @@ ${SURVEY_RATING_TEXT}`,
       ...profile,
       lastLaboralQuery: rag.queryUsed,
       lastRagNoSupport: rag.noSupport,
+      detectedCaseType: rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || rememberedCaseType,
       pendingCaseType: nextPendingCaseType,
     });
 
@@ -3894,6 +4013,15 @@ function isBotInfoQuery(text: string): boolean {
 
 function inferCaseTypeFromText(text: string): string | undefined {
   const normalized = normalizeForMatch(text);
+
+  if (['conciliacion', 'conciliar', 'centro de conciliacion'].some((key) => normalized.includes(key))) {
+    return 'Conciliación';
+  }
+
+  if (['proteccion al consumidor', 'consumidor', 'garantia de producto', 'garantia de servicio'].some((key) => normalized.includes(key))) {
+    return 'Comercial';
+  }
+
   const matchers: Array<{ label: string; keys: string[] }> = [
     {
       label: 'Laboral',
@@ -3986,7 +4114,7 @@ function inferCaseTypeFromText(text: string): string | undefined {
     { label: 'Tránsito', keys: ['transito', 'contravencionales', 'comparendo', 'multa', 'accidente de transito', 'choque'] },
     { label: 'Disciplinario', keys: ['disciplinario', 'procuraduria', 'falta disciplinaria'] },
     { label: 'Responsabilidad fiscal', keys: ['responsabilidad fiscal', 'contraloria', 'hallazgo fiscal'] },
-    { label: 'Comercial', keys: ['comercial', 'camara de comercio', 'sociedad', 'empresa', 'mercantil'] },
+    { label: 'Comercial', keys: ['comercial', 'camara de comercio', 'sociedad', 'empresa', 'mercantil', 'consumidor', 'proteccion al consumidor', 'garantia'] },
   ];
 
   for (const matcher of matchers) {
@@ -4017,6 +4145,7 @@ function isCaseTypeOnlyInput(text: string): boolean {
 
 function mapCaseTypeToCompetenceArea(caseType?: string): CompetenceAreaKey | undefined {
   if (!caseType) return undefined;
+  if (caseType === 'Laboral') return 'laboral';
   if (caseType === 'Penal') return 'penal';
   if (caseType === 'Civil') return 'civil';
   if (caseType === 'Comercial') return 'comercial';
@@ -4029,6 +4158,7 @@ function mapCaseTypeToCompetenceArea(caseType?: string): CompetenceAreaKey | und
 }
 
 function getCompetenceAreaLabel(areaKey: CompetenceAreaKey): string {
+  if (areaKey === 'laboral') return 'Laboral';
   if (areaKey === 'penal') return 'Penal';
   if (areaKey === 'civil') return 'Civil';
   if (areaKey === 'comercial') return 'Comercial';
@@ -4084,6 +4214,33 @@ function buildNotCompetentMessage(snapshot: CompetenceGateSnapshot): string {
   return `Gracias por la informacion. ⚠️ Por competencia, este caso no puede ser tramitado por el Consultorio Juridico.\n\nMotivo: ${snapshot.reason}\n\nSi podemos ayudarte en estos asuntos de *${snapshot.areaLabel}*:\n${buildCompetenceOptionsList(snapshot.options)}\n\nResponde con el numero de una opcion (por ejemplo: 1) o reformula tu caso segun una opcion atendible.`;
 }
 
+function isCompetenceFollowUpQuestion(text: string): boolean {
+  const normalized = normalizeForMatch(text);
+  return [
+    'es competencia',
+    'si es competencia',
+    'si es de competencia',
+    'lo atiende el consultorio',
+    'lo tramita el consultorio',
+    'si lo atiende',
+    'si lo tramita',
+    'me pueden ayudar',
+    'pueden ayudar',
+    'es atendible',
+  ].some((item) => normalized.includes(item));
+}
+
+function buildCompetentDecisionMessage(areaLabel: string): string {
+  return `Gracias por la informacion. ✅ Por competencia, este caso SI puede ser orientado por el Consultorio Juridico en el area de *${areaLabel}*.\n\nSi deseas, te doy una ruta inicial de accion y los siguientes pasos recomendados para tu caso.`;
+}
+
+function buildCompetenceNeedDetailsMessage(areaLabel?: string): string {
+  const areaLine = areaLabel
+    ? `Con lo que indicas, el asunto parece de *${areaLabel}*, pero aun faltan datos para confirmar competencia.\n\n`
+    : '';
+  return `${areaLine}Para definir si es competencia del consultorio, respondeme estos 3 datos:\n1) ¿Area exacta del caso? (laboral, penal, civil, familia, comercial, etc.)\n2) ¿Ante que despacho o autoridad va el asunto?\n3) ¿Hay cuantia? Si aplica, indicala en SMLV.`;
+}
+
 function pickCompetenceOptionFromInput(rawText: string, snapshot: CompetenceGateSnapshot): CompetenceOption | undefined {
   const byNumber = pickOptionNumber(rawText);
   if (byNumber && byNumber <= snapshot.options.length) {
@@ -4103,6 +4260,13 @@ function assessCaseCompetence(query: string, caseType?: string): CompetenceEvalu
   const inferredCaseType = caseType || inferCaseTypeFromText(query);
   const areaKey = mapCaseTypeToCompetenceArea(inferredCaseType);
   if (!areaKey) return { status: 'unknown' };
+
+  if (areaKey === 'laboral') {
+    if (hasAnyKeyword(normalized, ['contrato de trabajo', 'despido', 'liquidacion', 'indemnizacion', 'prestaciones', 'salario', 'acoso laboral', 'horas extras', 'recargos'])) {
+      return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+  }
 
   if (areaKey === 'penal') {
     if (hasAnyKeyword(normalized, [
@@ -4151,7 +4315,7 @@ function assessCaseCompetence(query: string, caseType?: string): CompetenceEvalu
         reason: 'Los procesos ante juez civil del circuito no son competencia del consultorio.',
       };
     }
-    if (hasAnyKeyword(normalized, ['juez civil municipal', 'unica instancia', 'jurisdiccion voluntaria', 'licencia', 'autorizacion'])) {
+    if (hasAnyKeyword(normalized, ['juez civil municipal', 'juez municipal', 'unica instancia', 'jurisdiccion voluntaria', 'licencia', 'autorizacion'])) {
       return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
     }
     return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
@@ -4184,6 +4348,14 @@ function assessCaseCompetence(query: string, caseType?: string): CompetenceEvalu
   if (areaKey === 'comercial') {
     if (hasAnyKeyword(normalized, ['consumidor', 'proteccion al consumidor'])) {
       return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
+    if (hasAnyKeyword(normalized, ['fusion', 'escision', 'sociedad', 'societario', 'constitucion de empresa', 'camara de comercio'])) {
+      return {
+        status: 'not_competent',
+        areaKey,
+        areaLabel: getCompetenceAreaLabel(areaKey),
+        reason: 'En comercial, los asuntos societarios y mercantiles generales no se atienden por esta via; solo proteccion al consumidor.',
+      };
     }
     return {
       status: 'not_competent',
