@@ -138,6 +138,43 @@ async function runLockedAreaRegression(index: number): Promise<{ ok: boolean; de
   };
 }
 
+async function runDivorcePersistenceRegression(index: number): Promise<{ ok: boolean; details: string[] }> {
+  const conversationId = `divorce-persist-${Date.now()}-${index}`;
+  const externalUserId = `divorce-persist-user-${Date.now()}-${index}`;
+  const details: string[] = [];
+
+  await bootstrapConversation(externalUserId, conversationId);
+
+  const blocked = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-blocked`,
+    text: 'me quiero divorciar',
+  });
+
+  const followup = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-followup`,
+    text: 'pero es por civil',
+  });
+
+  const blockedOk = /no puede ser tramitado por el consultorio juridico/i.test(blocked.responseText);
+  const stillBlockedOk = /no puede ser tramitado por el consultorio juridico|elige un numero de la lista/i.test(followup.responseText);
+  const noOrientationAfterFollowup = !/orientacion preliminar/i.test(followup.responseText);
+  const noAppointmentHints = !/si, deseo agendar una cita|reprogramar cita|cancelar cita/i.test(followup.responseText);
+
+  details.push(`blocked_ok=${blockedOk ? 'yes' : 'no'}`);
+  details.push(`followup_still_blocked=${stillBlockedOk ? 'yes' : 'no'}`);
+  details.push(`no_orientation_after_followup=${noOrientationAfterFollowup ? 'yes' : 'no'}`);
+  details.push(`no_appointment_hints=${noAppointmentHints ? 'yes' : 'no'}`);
+
+  return {
+    ok: blockedOk && stillBlockedOk && noOrientationAfterFollowup && noAppointmentHints,
+    details,
+  };
+}
+
 async function run(): Promise<void> {
   const scenarios: Scenario[] = [
     {
@@ -179,6 +216,12 @@ async function run(): Promise<void> {
     {
       id: 'familia-divorcio-civil-not-competent',
       prompt: 'Necesito divorcio civil.',
+      expected: 'not_competent',
+      shouldHideAppointments: true,
+    },
+    {
+      id: 'hardblock-divorcio-verbal-not-competent',
+      prompt: 'Me quiero divorciar',
       expected: 'not_competent',
       shouldHideAppointments: true,
     },
@@ -251,6 +294,12 @@ async function run(): Promise<void> {
       prompt: 'Me negaron un medicamento y quiero presentar tutela. Es competencia del consultorio?',
       expected: 'competent',
     },
+    {
+      id: 'hardblock-penal-extradicion-not-competent',
+      prompt: 'Tengo un proceso de extradicion. Es competencia del consultorio?',
+      expected: 'not_competent',
+      shouldHideAppointments: true,
+    },
   ];
 
   let correct = 0;
@@ -293,6 +342,17 @@ async function run(): Promise<void> {
     console.log('[FAIL] locked-area-family-selection-regression');
   }
   for (const detail of lockedAreaRegression.details) {
+    console.log(`  ${detail}`);
+  }
+
+  const divorcePersistenceRegression = await runDivorcePersistenceRegression(scenarios.length + 2);
+  if (divorcePersistenceRegression.ok) {
+    console.log('[OK] divorce-noncompetence-persistence-regression');
+  } else {
+    wrong += 1;
+    console.log('[FAIL] divorce-noncompetence-persistence-regression');
+  }
+  for (const detail of divorcePersistenceRegression.details) {
     console.log(`  ${detail}`);
   }
 

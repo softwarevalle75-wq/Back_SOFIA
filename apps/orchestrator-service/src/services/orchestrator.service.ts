@@ -4326,6 +4326,37 @@ function pickCompetenceOptionFromInput(rawText: string, snapshot: CompetenceGate
 
 function assessCaseCompetence(query: string, caseType?: string): CompetenceEvaluation {
   const normalized = normalizeForMatch(query);
+
+  if (hasAnyKeyword(normalized, ['divorcio', 'divorciar', 'me quiero divorciar'])) {
+    const areaKey: CompetenceAreaKey = 'familia';
+    return {
+      status: 'not_competent',
+      areaKey,
+      areaLabel: getCompetenceAreaLabel(areaKey),
+      reason: 'Divorcio civil y declaracion de union marital de hecho no se tramitan por esta via en consultorio.',
+    };
+  }
+
+  if (hasAnyKeyword(normalized, ['extincion de dominio', 'enriquecimiento ilicito', 'extradicion'])) {
+    const areaKey: CompetenceAreaKey = 'penal';
+    return {
+      status: 'not_competent',
+      areaKey,
+      areaLabel: getCompetenceAreaLabel(areaKey),
+      reason: 'El asunto penal reportado esta fuera de la competencia del consultorio (materias excluidas).',
+    };
+  }
+
+  if (hasAnyKeyword(normalized, ['juez penal especializado', 'juez penal del circuito', 'sala de casacion penal', 'corte suprema'])) {
+    const areaKey: CompetenceAreaKey = 'penal';
+    return {
+      status: 'not_competent',
+      areaKey,
+      areaLabel: getCompetenceAreaLabel(areaKey),
+      reason: 'El asunto penal reportado esta fuera de la competencia del consultorio (circuito/especializado/casacion o materias excluidas).',
+    };
+  }
+
   const inferredCaseType = caseType || inferCaseTypeFromText(query);
   const areaKey = mapCaseTypeToCompetenceArea(inferredCaseType);
   if (!areaKey) return { status: 'unknown' };
