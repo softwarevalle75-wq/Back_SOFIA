@@ -7,6 +7,7 @@ type Scenario = {
   id: string;
   prompt: string;
   expected: ExpectedResult;
+  shouldHideAppointments?: boolean;
 };
 
 function buildMessage(externalUserId: string, text: string): MessageIn {
@@ -73,6 +74,7 @@ async function runScenario(scenario: Scenario, index: number): Promise<{
   scenario: Scenario;
   result: ExpectedResult | 'indeterminate';
   responseText: string;
+  appointmentHintsVisible: boolean;
 }> {
   const conversationId = `competence-${Date.now()}-${index}`;
   const externalUserId = `competence-user-${index}-${Date.now()}`;
@@ -90,6 +92,7 @@ async function runScenario(scenario: Scenario, index: number): Promise<{
     scenario,
     result: classifyResult(response.responseText, response.payload),
     responseText: response.responseText,
+    appointmentHintsVisible: /si, deseo agendar una cita|reprogramar cita|cancelar cita/i.test(response.responseText),
   };
 }
 
@@ -129,6 +132,13 @@ async function run(): Promise<void> {
       id: 'familia-not-competent',
       prompt: 'Necesito divorcio y quiero saber si es competencia del consultorio.',
       expected: 'not_competent',
+      shouldHideAppointments: true,
+    },
+    {
+      id: 'familia-divorcio-civil-not-competent',
+      prompt: 'Necesito divorcio civil.',
+      expected: 'not_competent',
+      shouldHideAppointments: true,
     },
     {
       id: 'comercial-competent',
@@ -139,6 +149,7 @@ async function run(): Promise<void> {
       id: 'comercial-not-competent',
       prompt: 'Es un asunto de constitucion de sociedad en camara de comercio. Es atendible?',
       expected: 'not_competent',
+      shouldHideAppointments: true,
     },
     {
       id: 'conciliacion-competent',
@@ -154,6 +165,7 @@ async function run(): Promise<void> {
       id: 'unknown-needs-detail',
       prompt: 'No tengo claro el area, solo quiero saber si es competencia de ustedes.',
       expected: 'need_detail',
+      shouldHideAppointments: true,
     },
     {
       id: 'edge-laboral-coloquial-competent',
@@ -174,6 +186,7 @@ async function run(): Promise<void> {
       id: 'edge-familia-union-marital-not-competent',
       prompt: 'Quiero declaracion de union marital de hecho. Si es competencia?',
       expected: 'not_competent',
+      shouldHideAppointments: true,
     },
     {
       id: 'edge-conciliacion-letra-competent',
@@ -189,6 +202,7 @@ async function run(): Promise<void> {
       id: 'edge-comercial-societario-not-competent',
       prompt: 'Necesito asesoria para fusion de sociedades. Es de competencia?',
       expected: 'not_competent',
+      shouldHideAppointments: true,
     },
     {
       id: 'edge-constitucional-tutela-competent',
@@ -204,19 +218,28 @@ async function run(): Promise<void> {
   for (let i = 0; i < scenarios.length; i += 1) {
     const output = await runScenario(scenarios[i], i + 1);
     const isMatch = output.result === output.scenario.expected;
+    const expectedHideAppointments = output.scenario.shouldHideAppointments ?? false;
+    const appointmentVisibilityMismatch = expectedHideAppointments && output.appointmentHintsVisible;
 
     if (output.result === 'indeterminate') {
       indeterminate += 1;
-    } else if (isMatch) {
+    } else if (isMatch && !appointmentVisibilityMismatch) {
       correct += 1;
     } else {
       wrong += 1;
     }
 
-    const status = isMatch ? 'OK' : output.result === 'indeterminate' ? 'INDETERMINATE' : 'FAIL';
+    const status = output.result === 'indeterminate'
+      ? 'INDETERMINATE'
+      : isMatch && !appointmentVisibilityMismatch
+        ? 'OK'
+        : 'FAIL';
     console.log(`[${status}] ${output.scenario.id}`);
     console.log(`  expected: ${output.scenario.expected}`);
     console.log(`  got: ${output.result}`);
+    if (expectedHideAppointments) {
+      console.log(`  appointment_hints_visible: ${output.appointmentHintsVisible ? 'yes' : 'no'}`);
+    }
     console.log(`  response: ${output.responseText.replace(/\s+/g, ' ').trim()}`);
   }
 

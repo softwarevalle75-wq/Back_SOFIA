@@ -78,6 +78,9 @@ const DATA_POLICY_REJECTED_TEXT =
   'Gracias por responder. Sin esa autorización no puedo continuar por este medio. Si más adelante quieres continuar, escribe reset. ¡Aquí estaré!';
 
 const FOLLOWUP_HINT_TEXT =
+  '¿Qué deseas hacer ahora?\n↩️ Para realizar otra consulta, escribe: *reset*\n🚪 Para finalizar la conversación, escribe: *salir*';
+
+const FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS =
   '¿Qué deseas hacer ahora?\n↩️ Para realizar otra consulta, escribe: *reset*\n📅 Para agendar una cita, escribe: *si, deseo agendar una cita*\nSi ya tienes una cita, puedes escribir:\n• *reprogramar cita*\n• *cancelar cita*\n🚪 Para finalizar la conversación, escribe: *salir*';
 
 const GOODBYE_TEXT =
@@ -960,7 +963,16 @@ function clearTransientConsultationProfile(profile: Record<string, unknown>): Re
   delete next.pendingClarification;
   delete next.lastRagNoSupport;
   delete next.lastLaboralQuery;
+  delete next.competenceStatus;
   return next;
+}
+
+function hasPositiveCompetence(profile: Record<string, unknown>): boolean {
+  return profile.competenceStatus === 'competent';
+}
+
+function followupHintForProfile(profile: Record<string, unknown>): string {
+  return hasPositiveCompetence(profile) ? FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS : FOLLOWUP_HINT_TEXT;
 }
 
 function buildAppointmentListText(appointments: StoredAppointment[]): string {
@@ -1700,6 +1712,7 @@ async function runStatefulFlow(input: {
     const nextProfile = {
       ...profile,
       competenceGate: undefined,
+      competenceStatus: 'competent',
       competenceArea: snapshot.areaLabel,
       competenceSelection: selected.label,
       competenceUnlockedAt: new Date().toISOString(),
@@ -1746,7 +1759,7 @@ async function runStatefulFlow(input: {
         },
       });
       return {
-        responseText: `Perfecto, continuamos sin agendar cita. ${FOLLOWUP_HINT_TEXT}`,
+        responseText: `Perfecto, continuamos sin agendar cita. ${FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS}`,
         patch: {
           intent: 'consulta_laboral',
           step: 'ask_issue',
@@ -2399,7 +2412,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
       });
 
       return {
-        responseText: `Listo, cancelé el proceso de agendamiento. ${FOLLOWUP_HINT_TEXT}`,
+        responseText: `Listo, cancelé el proceso de agendamiento. ${FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS}`,
         patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'cancel_process' },
       };
@@ -2772,7 +2785,7 @@ También puedes escribir directamente el nuevo número (ejemplo: 3001234567).`,
         });
 
         return {
-          responseText: `✅ Tu cita fue reprogramada con éxito.\n\n📅 ${formatWeekday(updatedRecord.day)}\n⏰ ${formatHour(updatedRecord.hour24, updatedRecord.minute)}\n📍 Modalidad ${updatedRecord.mode}\n\n${FOLLOWUP_HINT_TEXT}`,
+          responseText: `✅ Tu cita fue reprogramada con éxito.\n\n📅 ${formatWeekday(updatedRecord.day)}\n⏰ ${formatHour(updatedRecord.hour24, updatedRecord.minute)}\n📍 Modalidad ${updatedRecord.mode}\n\n${FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS}`,
           patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
           payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'rescheduled' },
         };
@@ -3064,6 +3077,7 @@ ${SURVEY_RATING_TEXT}`,
         };
         const nextProfile = {
           ...baseProfile,
+          competenceStatus: 'not_competent',
           competenceGate: snapshot,
         };
 
@@ -3093,6 +3107,7 @@ ${SURVEY_RATING_TEXT}`,
       if (directAssessment.status === 'competent' && directAssessment.areaLabel && isCompetenceFollowUpQuestion(initialQuery)) {
         const nextProfile = {
           ...baseProfile,
+          competenceStatus: 'competent',
           pendingClarification: undefined,
           pendingCaseType: inferredInitialCaseType,
           detectedCaseType: inferredInitialCaseType,
@@ -3129,6 +3144,7 @@ ${SURVEY_RATING_TEXT}`,
             step: 'ask_issue',
             profile: {
               ...baseProfile,
+              competenceStatus: 'unknown',
               pendingClarification: initialQuery,
               pendingCaseType: inferredInitialCaseType,
               detectedCaseType: inferredInitialCaseType,
@@ -3189,6 +3205,7 @@ ${SURVEY_RATING_TEXT}`,
 
       const nextProfile = markConsultationAsActive({
         ...baseProfile,
+        competenceStatus: hasPositiveCompetence(baseProfile) ? 'competent' : 'unknown',
         lastLaboralQuery: rag.queryUsed,
         lastRagNoSupport: rag.noSupport,
         detectedCaseType: inferredInitialCaseType || inferredPendingCaseType || pendingCaseType,
@@ -3434,7 +3451,7 @@ ${SURVEY_RATING_TEXT}`,
     });
 
     return {
-      responseText: `✅ Tu cita fue cancelada con éxito.\n\n📅 ${formatWeekday(updated.day)}\n⏰ ${formatHour(updated.hour24, updated.minute)}\n📍 Modalidad ${updated.mode}\n\n${FOLLOWUP_HINT_TEXT}`,
+      responseText: `✅ Tu cita fue cancelada con éxito.\n\n📅 ${formatWeekday(updated.day)}\n⏰ ${formatHour(updated.hour24, updated.minute)}\n📍 Modalidad ${updated.mode}\n\n${FOLLOWUP_HINT_TEXT_WITH_APPOINTMENTS}`,
       patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'cancelled' },
     };
@@ -3500,6 +3517,14 @@ ${SURVEY_RATING_TEXT}`,
     }
 
     if (isScheduleAppointmentRequest(input.text)) {
+      if (!hasPositiveCompetence(profile)) {
+        return {
+          responseText: `Antes de agendar una cita debo confirmar que tu caso sea de competencia del consultorio. ${buildCompetenceNeedDetailsMessage()}`,
+          patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: { ...profile, competenceStatus: 'unknown' } },
+          payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', appointmentFlow: 'blocked_competence_unconfirmed' },
+        };
+      }
+
       const nextProfile = markConsultationAsCompleted(markConsultationAsActive(profile));
       conversationStore.set(key, {
         stage: 'awaiting_user_full_name',
@@ -3514,6 +3539,14 @@ ${SURVEY_RATING_TEXT}`,
     }
 
     if (isNoMoreDoubtsMessage(input.text)) {
+      if (!hasPositiveCompetence(profile)) {
+        return {
+          responseText: `Antes de ofrecer agendamiento, primero debo confirmar competencia del caso. ${buildCompetenceNeedDetailsMessage()}`,
+          patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: { ...profile, competenceStatus: 'unknown' } },
+          payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', closureHint: true, appointmentFlow: 'offer_blocked_competence_unconfirmed' },
+        };
+      }
+
       conversationStore.set(key, {
         stage: 'awaiting_appointment_opt',
         category: 'laboral',
@@ -3528,7 +3561,7 @@ ${SURVEY_RATING_TEXT}`,
 
     if (isAnotherQuestionPrompt(input.text)) {
       return {
-        responseText: `Claro, cuéntame tu otra duda y te ayudo. ${FOLLOWUP_HINT_TEXT}`,
+        responseText: `Claro, cuéntame tu otra duda y te ayudo. ${followupHintForProfile(profile)}`,
         patch: { intent: 'consulta_laboral', step: 'ask_issue', profile },
         payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', awaitingNewQuestion: true },
       };
@@ -3572,6 +3605,7 @@ ${SURVEY_RATING_TEXT}`,
       };
       const nextProfile = {
         ...profile,
+        competenceStatus: 'not_competent',
         competenceGate: snapshot,
       };
 
@@ -3601,6 +3635,7 @@ ${SURVEY_RATING_TEXT}`,
     if (liveAssessment.status === 'competent' && liveAssessment.areaLabel && isCompetenceFollowUpQuestion(currentText)) {
       const nextProfile = markConsultationAsActive({
         ...profile,
+        competenceStatus: 'competent',
         detectedCaseType: rememberedCaseType || inferCaseTypeFromText(previousQuery) || inferCaseTypeFromText(currentText),
       });
 
@@ -3635,6 +3670,7 @@ ${SURVEY_RATING_TEXT}`,
           step: 'ask_issue',
           profile: markConsultationAsActive({
             ...profile,
+            competenceStatus: 'unknown',
             pendingCaseType: rememberedCaseType,
             detectedCaseType: rememberedCaseType,
           }),
@@ -3677,6 +3713,7 @@ ${SURVEY_RATING_TEXT}`,
 
     const nextProfile = markConsultationAsActive({
       ...profile,
+      competenceStatus: hasPositiveCompetence(profile) ? 'competent' : 'unknown',
       lastLaboralQuery: rag.queryUsed,
       lastRagNoSupport: rag.noSupport,
       detectedCaseType: rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || rememberedCaseType,
@@ -4013,6 +4050,10 @@ function isBotInfoQuery(text: string): boolean {
 
 function inferCaseTypeFromText(text: string): string | undefined {
   const normalized = normalizeForMatch(text);
+
+  if (['divorcio', 'union marital', 'cuota de alimentos', 'alimentos', 'custodia', 'comisaria de familia'].some((key) => normalized.includes(key))) {
+    return 'Familia-alimentos';
+  }
 
   if (['conciliacion', 'conciliar', 'centro de conciliacion'].some((key) => normalized.includes(key))) {
     return 'Conciliación';
