@@ -175,6 +175,35 @@ async function runDivorcePersistenceRegression(index: number): Promise<{ ok: boo
   };
 }
 
+async function runFamilyLiquidationGuidanceRegression(index: number): Promise<{ ok: boolean; details: string[] }> {
+  const conversationId = `family-liquidation-${Date.now()}-${index}`;
+  const externalUserId = `family-liquidation-user-${Date.now()}-${index}`;
+  const details: string[] = [];
+
+  await bootstrapConversation(externalUserId, conversationId);
+
+  const direct = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-direct`,
+    text: 'Quiero liquidar las sociedades con activos hasta 70 SMLV, es competencia del consultorio?',
+  });
+
+  const familyAreaMention = /area de \*familia\*|asunto parece de \*familia\*/i.test(direct.responseText);
+  const noDivorceQuestionPattern = !/el divorcio seria de mutuo acuerdo/i.test(direct.responseText);
+  const avoidsCommercialMisroute = !/area de \*comercial\*/i.test(direct.responseText);
+
+  details.push(`family_area_mention=${familyAreaMention ? 'yes' : 'no'}`);
+  details.push(`avoids_divorce_question_pattern=${noDivorceQuestionPattern ? 'yes' : 'no'}`);
+  details.push(`avoids_commercial_misroute=${avoidsCommercialMisroute ? 'yes' : 'no'}`);
+  details.push(`response_sample=${direct.responseText.replace(/\s+/g, ' ').trim().slice(0, 220)}`);
+
+  return {
+    ok: familyAreaMention && noDivorceQuestionPattern && avoidsCommercialMisroute,
+    details,
+  };
+}
+
 async function run(): Promise<void> {
   const scenarios: Scenario[] = [
     {
@@ -336,6 +365,7 @@ async function run(): Promise<void> {
 
   const lockedAreaRegression = await runLockedAreaRegression(scenarios.length + 1);
   if (lockedAreaRegression.ok) {
+    correct += 1;
     console.log('[OK] locked-area-family-selection-regression');
   } else {
     wrong += 1;
@@ -347,6 +377,7 @@ async function run(): Promise<void> {
 
   const divorcePersistenceRegression = await runDivorcePersistenceRegression(scenarios.length + 2);
   if (divorcePersistenceRegression.ok) {
+    correct += 1;
     console.log('[OK] divorce-noncompetence-persistence-regression');
   } else {
     wrong += 1;
@@ -356,9 +387,22 @@ async function run(): Promise<void> {
     console.log(`  ${detail}`);
   }
 
+  const familyLiquidationGuidanceRegression = await runFamilyLiquidationGuidanceRegression(scenarios.length + 3);
+  if (familyLiquidationGuidanceRegression.ok) {
+    correct += 1;
+    console.log('[OK] family-liquidation-guidance-regression');
+  } else {
+    wrong += 1;
+    console.log('[FAIL] family-liquidation-guidance-regression');
+  }
+  for (const detail of familyLiquidationGuidanceRegression.details) {
+    console.log(`  ${detail}`);
+  }
+
+  const totalChecks = scenarios.length + 3;
   const determinate = correct + wrong;
-  const determinateCoverage = scenarios.length > 0
-    ? Number(((determinate / scenarios.length) * 100).toFixed(2))
+  const determinateCoverage = totalChecks > 0
+    ? Number(((determinate / totalChecks) * 100).toFixed(2))
     : 0;
   const determinateErrorRate = determinate > 0
     ? Number(((wrong / determinate) * 100).toFixed(2))
@@ -366,7 +410,7 @@ async function run(): Promise<void> {
 
   console.log('');
   console.log('Competence evaluation summary');
-  console.log(`- total: ${scenarios.length}`);
+  console.log(`- total: ${totalChecks}`);
   console.log(`- correct: ${correct}`);
   console.log(`- wrong: ${wrong}`);
   console.log(`- indeterminate: ${indeterminate}`);

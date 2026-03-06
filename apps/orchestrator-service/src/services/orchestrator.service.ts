@@ -1369,11 +1369,38 @@ async function resolveLaboralQuery(input: {
 
   const inferredFromQuery = inferCaseTypeFromText(query);
   const effectiveCaseType = input.forcedCaseType || inferredFromQuery || input.preferredCaseType;
+
+  const isFamilyLiquidationQuery = isFamilyCaseType(effectiveCaseType)
+    && ['liquidacion de sociedad', 'liquidaciones de sociedades', 'liquidacion de bienes', 'sociedad conyugal', 'sociedad patrimonial', 'disolucion']
+      .some((term) => normalizeForMatch(query).includes(term));
+
+  if (isFamilyLiquidationQuery) {
+    return {
+      responseText: truncateForWhatsapp(
+        buildFriendlyOrientationResponse(
+          buildGeneralGuidanceByCaseType(effectiveCaseType, query),
+          buildClarifyingQuestions(effectiveCaseType, query),
+        ),
+      ),
+      payload: {
+        correlationId: input.correlationId,
+        inferredCaseType: effectiveCaseType ?? null,
+        rag: {
+          status: 'skipped_family_liquidation_template',
+          reason: 'family_liquidation_rule',
+        },
+      },
+      noSupport: true,
+      queryUsed: query,
+      inferredCaseType: effectiveCaseType,
+    };
+  }
+
   if (shouldUseQuickOrientation(query, effectiveCaseType)) {
     return {
       responseText: truncateForWhatsapp(
         buildFriendlyOrientationResponse(
-          buildGuidanceWithOptionalContext(effectiveCaseType),
+          buildGuidanceWithOptionalContext(effectiveCaseType, query),
           buildClarifyingQuestions(effectiveCaseType, query),
         ),
       ),
@@ -4072,6 +4099,10 @@ function inferCaseTypeFromText(text: string): string | undefined {
     return 'Familia-alimentos';
   }
 
+  if (['liquidacion de sociedad', 'liquidar las sociedades', 'sociedad conyugal', 'sociedad patrimonial', 'disolucion de sociedad'].some((key) => normalized.includes(key))) {
+    return 'Familia-alimentos';
+  }
+
   if (['conciliacion', 'conciliar', 'centro de conciliacion'].some((key) => normalized.includes(key))) {
     return 'Conciliación';
   }
@@ -4449,6 +4480,10 @@ function assessCaseCompetence(query: string, caseType?: string): CompetenceEvalu
     if (hasAnyKeyword(normalized, ['consumidor', 'proteccion al consumidor'])) {
       return { status: 'competent', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
     }
+    if (hasAnyKeyword(normalized, ['liquidacion']) && hasAnyKeyword(normalized, ['sociedad', 'sociedades'])
+      && !hasAnyKeyword(normalized, ['camara de comercio', 'empresa', 'mercantil', 'societario', 'fusion', 'escision'])) {
+      return { status: 'unknown', areaKey, areaLabel: getCompetenceAreaLabel(areaKey) };
+    }
     if (hasAnyKeyword(normalized, ['fusion', 'escision', 'sociedad', 'societario', 'constitucion de empresa', 'camara de comercio'])) {
       return {
         status: 'not_competent',
@@ -4546,6 +4581,9 @@ function buildNeedsContextFallback(caseType?: string): string {
 
 function buildClarifyingQuestions(caseType?: string, queryText?: string): string {
   const normalizedQuery = normalizeForMatch(queryText || '');
+  const isFamilyLiquidation = isFamilyCaseType(caseType)
+    && ['liquidacion de sociedad', 'liquidaciones de sociedades', 'liquidacion de bienes', 'sociedad conyugal', 'sociedad patrimonial', 'disolucion', 'repartir bienes']
+      .some((term) => normalizedQuery.includes(term));
   const isFamilyAlimony = isFamilyCaseType(caseType)
     && ['alimentos', 'cuota alimentaria', 'cuota', 'incumplimiento de cuota', 'inasistencia alimentaria']
       .some((term) => normalizedQuery.includes(term));
@@ -4554,8 +4592,12 @@ function buildClarifyingQuestions(caseType?: string, queryText?: string): string
     return 'Para orientarte mejor en cuota alimentaria, ayúdame con estos datos:\n1) ¿La cuota quedó fijada por juez, comisaría o acuerdo?\n2) ¿Desde cuándo hay incumplimiento y cuál es el valor adeudado aproximado?\n3) ¿Tienes soportes (acta, sentencia o comprobantes de pago/no pago)?\n\nCon eso te indico la ruta más adecuada para exigir el cumplimiento.';
   }
 
+  if (isFamilyLiquidation) {
+    return 'Para orientarte mejor en liquidación de sociedad, compárteme:\n1) ¿La relación es matrimonio civil o unión marital de hecho?\n2) ¿Cuál es el valor aproximado de los activos (en SMLV)?\n3) ¿Hay acuerdo para liquidar o existe conflicto entre las partes?\n\nCon eso te indico la ruta más adecuada y si procede por esta vía.';
+  }
+
   if (isFamilyCaseType(caseType)) {
-    return 'Para darte una guía más útil, respóndeme estas preguntas rápidas:\n1) ¿El divorcio sería de mutuo acuerdo o hay conflicto?\n2) ¿Hay hijos menores o acuerdos de custodia/alimentos?\n3) ¿Hay bienes o deudas por repartir?\n\nCon esas respuestas te doy una ruta clara paso a paso.';
+    return 'Para darte una guía más útil en familia, respóndeme estas preguntas rápidas:\n1) ¿Cuál es el objetivo principal? (alimentos, custodia, liquidación, otro)\n2) ¿Hay hijos menores involucrados?\n3) ¿Existe conflicto o hay acuerdo entre las partes?\n\nCon esas respuestas te doy una ruta clara paso a paso.';
   }
   if (caseType === 'Laboral') {
     return 'Para darte una orientación más precisa, respóndeme estas preguntas:\n1) ¿Qué tipo de contrato tenías (verbal, fijo, indefinido, prestación)?\n2) ¿En qué fecha fue el despido o el hecho principal?\n3) ¿Te deben salarios, prestaciones o indemnización?\n\nCon eso te explico la mejor ruta de acción.';
@@ -4576,9 +4618,17 @@ function buildNoContentFallback(caseType?: string): string {
   return 'Lo siento, no puedo atender esa consulta con la información disponible del consultorio jurídico.';
 }
 
-function buildGeneralGuidanceByCaseType(caseType?: string): string {
+function buildGeneralGuidanceByCaseType(caseType?: string, queryText?: string): string {
+  const normalizedQuery = normalizeForMatch(queryText || '');
+  const isFamilyLiquidation = isFamilyCaseType(caseType)
+    && ['liquidacion de sociedad', 'liquidaciones de sociedades', 'liquidacion de bienes', 'sociedad conyugal', 'sociedad patrimonial', 'disolucion']
+      .some((term) => normalizedQuery.includes(term));
+
   if (isFamilyCaseType(caseType)) {
-    return 'Con lo que me compartes, en un caso de familia puedes empezar por reunir documentos clave (registro civil, pruebas de convivencia o de la situación) y definir si buscas conciliación o demanda según el objetivo (por ejemplo, divorcio, custodia o alimentos).';
+    if (isFamilyLiquidation) {
+      return 'Con lo que me compartes, en liquidación de sociedad en familia primero conviene identificar el tipo de vínculo (matrimonio o unión marital), estimar activos en SMLV y revisar si hay acuerdo o conflicto para definir la ruta procedente.';
+    }
+    return 'Con lo que me compartes, en un caso de familia conviene reunir documentos clave (registro civil, pruebas de convivencia o de la situación) y definir el objetivo principal (alimentos, custodia, liquidación u otro asunto atendible).';
   }
   if (caseType === 'Laboral') {
     return 'Con lo que me indicas, en un caso laboral conviene reunir contrato, desprendibles de pago y comunicaciones con el empleador para revisar posibles vulneraciones y definir la ruta (conciliación, reclamación o demanda).';
@@ -4611,7 +4661,7 @@ function isUrgentProtectionContext(query: string): boolean {
 
 function buildRagServiceErrorFallback(query: string, caseType?: string): string {
   const inferredCaseType = caseType || inferCaseTypeFromText(query);
-  const baseGuidance = buildGeneralGuidanceByCaseType(inferredCaseType);
+  const baseGuidance = buildGeneralGuidanceByCaseType(inferredCaseType, query);
 
   if (isUrgentProtectionContext(query)) {
     return `No pude consultar la base jurídica en este momento, pero sí puedo darte una ruta inicial de seguridad.
@@ -4626,8 +4676,8 @@ Si estás en riesgo inmediato, contacta emergencias (123) y, si aplica, la Líne
 ${baseGuidance}`;
 }
 
-function buildGuidanceWithOptionalContext(caseType?: string): string {
-  return buildGeneralGuidanceByCaseType(caseType);
+function buildGuidanceWithOptionalContext(caseType?: string, queryText?: string): string {
+  return buildGeneralGuidanceByCaseType(caseType, queryText);
 }
 
 function hasSpecificContextInQuery(query: string, caseType?: string): boolean {
@@ -4665,7 +4715,7 @@ function buildRagWhatsappText(result: RagAnswerResult, caseType?: string, queryT
 
   const base = sanitizeRagAnswerForUser(result.answer.trim());
   if (base.length < 40) {
-    return truncateForWhatsapp(buildFriendlyOrientationResponse(buildGuidanceWithOptionalContext(caseType)));
+    return truncateForWhatsapp(buildFriendlyOrientationResponse(buildGuidanceWithOptionalContext(caseType, queryText)));
   }
   const prefix = caseType ? `Tipo de caso: ${caseType}\n\n` : '';
   return truncateForWhatsapp(buildFriendlyOrientationResponse(`${prefix}${base}`));
