@@ -127,13 +127,15 @@ async function runLockedAreaRegression(index: number): Promise<{ ok: boolean; de
   const blockedOk = /no puede ser tramitado por el consultorio juridico/i.test(blocked.responseText);
   const optionOk = /este asunto si esta dentro de nuestra competencia/i.test(pickOption.responseText);
   const noLaboralLabel = !/tipo de caso:\s*laboral/i.test(followup.responseText);
+  const warnsAreaSwitch = /ruta de \*familia\*|si deseas cambiar de area, escribe \*reset\*/i.test(followup.responseText);
 
   details.push(`blocked_ok=${blockedOk ? 'yes' : 'no'}`);
   details.push(`option_ok=${optionOk ? 'yes' : 'no'}`);
   details.push(`no_laboral_label_after_lock=${noLaboralLabel ? 'yes' : 'no'}`);
+  details.push(`warns_area_switch_with_reset=${warnsAreaSwitch ? 'yes' : 'no'}`);
 
   return {
-    ok: blockedOk && optionOk && noLaboralLabel,
+    ok: blockedOk && optionOk && noLaboralLabel && warnsAreaSwitch,
     details,
   };
 }
@@ -200,6 +202,63 @@ async function runFamilyLiquidationGuidanceRegression(index: number): Promise<{ 
 
   return {
     ok: familyAreaMention && noDivorceQuestionPattern && avoidsCommercialMisroute,
+    details,
+  };
+}
+
+async function runNotCompetentResetHintRegression(index: number): Promise<{ ok: boolean; details: string[] }> {
+  const conversationId = `not-competent-reset-${Date.now()}-${index}`;
+  const externalUserId = `not-competent-reset-user-${Date.now()}-${index}`;
+  const details: string[] = [];
+
+  await bootstrapConversation(externalUserId, conversationId);
+
+  const blocked = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-blocked`,
+    text: 'necesito divorcio civil',
+  });
+
+  const includesResetHint = /si ninguna opcion te sirve, escribe \*reset\*/i.test(blocked.responseText);
+  details.push(`includes_reset_hint=${includesResetHint ? 'yes' : 'no'}`);
+
+  return {
+    ok: includesResetHint,
+    details,
+  };
+}
+
+async function runCompetentAppointmentAvailabilityRegression(index: number): Promise<{ ok: boolean; details: string[] }> {
+  const conversationId = `competent-appointment-${Date.now()}-${index}`;
+  const externalUserId = `competent-appointment-user-${Date.now()}-${index}`;
+  const details: string[] = [];
+
+  await bootstrapConversation(externalUserId, conversationId);
+
+  const competent = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-competent`,
+    text: 'fui victima de lesiones y ya denuncie en fiscalia, es competencia?',
+  });
+
+  const canSeeAppointmentOption = /si, deseo agendar una cita/i.test(competent.responseText);
+
+  const startAppointment = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-start-appointment`,
+    text: 'si, deseo agendar una cita',
+  });
+
+  const startsDataCollection = /antes de agendar la cita te pido unos datos rapidos|empecemos con tu nombre completo/i.test(startAppointment.responseText);
+
+  details.push(`can_see_appointment_option=${canSeeAppointmentOption ? 'yes' : 'no'}`);
+  details.push(`can_start_appointment_flow=${startsDataCollection ? 'yes' : 'no'}`);
+
+  return {
+    ok: canSeeAppointmentOption && startsDataCollection,
     details,
   };
 }
@@ -399,7 +458,31 @@ async function run(): Promise<void> {
     console.log(`  ${detail}`);
   }
 
-  const totalChecks = scenarios.length + 3;
+  const notCompetentResetHintRegression = await runNotCompetentResetHintRegression(scenarios.length + 4);
+  if (notCompetentResetHintRegression.ok) {
+    correct += 1;
+    console.log('[OK] not-competent-reset-hint-regression');
+  } else {
+    wrong += 1;
+    console.log('[FAIL] not-competent-reset-hint-regression');
+  }
+  for (const detail of notCompetentResetHintRegression.details) {
+    console.log(`  ${detail}`);
+  }
+
+  const competentAppointmentAvailabilityRegression = await runCompetentAppointmentAvailabilityRegression(scenarios.length + 5);
+  if (competentAppointmentAvailabilityRegression.ok) {
+    correct += 1;
+    console.log('[OK] competent-appointment-availability-regression');
+  } else {
+    wrong += 1;
+    console.log('[FAIL] competent-appointment-availability-regression');
+  }
+  for (const detail of competentAppointmentAvailabilityRegression.details) {
+    console.log(`  ${detail}`);
+  }
+
+  const totalChecks = scenarios.length + 5;
   const determinate = correct + wrong;
   const determinateCoverage = totalChecks > 0
     ? Number(((determinate / totalChecks) * 100).toFixed(2))

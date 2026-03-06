@@ -1420,7 +1420,10 @@ async function resolveLaboralQuery(input: {
 
   const ragStartedAt = Date.now();
   try {
-    const ragResult = await askRag(query, input.correlationId);
+    const queryForRag = input.forcedCaseType
+      ? `[Contexto de area forzada: ${input.forcedCaseType}] ${query}`
+      : query;
+    const ragResult = await askRag(queryForRag, input.correlationId);
     const inferredFromRag = inferCaseTypeLabel(query, ragResult.answer);
     const inferredCaseType = input.forcedCaseType || inferredFromRag || inferredFromQuery || input.preferredCaseType;
     const fallbackKind = pickRagFallbackKind(ragResult);
@@ -1763,7 +1766,7 @@ async function runStatefulFlow(input: {
     });
 
     return {
-      responseText: `Perfecto. ✅ Este asunto si esta dentro de nuestra competencia (${snapshot.areaLabel}).\n\nCuentame brevemente que ocurrio, cuando paso y que resultado esperas para orientarte mejor.`,
+      responseText: `Perfecto. ✅ Este asunto si esta dentro de nuestra competencia (${snapshot.areaLabel}).\n\nCuentame brevemente que ocurrio, cuando paso y que resultado esperas para orientarte mejor.\n\n${APPOINTMENT_OFFER_TEXT}`,
       patch: { intent: 'consulta_laboral', step: 'ask_issue', profile: nextProfile },
       payload: { orchestrator: true, correlationId: input.correlationId, flow: 'stateful', competenceGate: 'selection_ok', selectedOption: selected.id },
     };
@@ -3626,6 +3629,24 @@ ${SURVEY_RATING_TEXT}`,
     const lockedCaseType = typeof profile.competenceLockedCaseType === 'string'
       ? profile.competenceLockedCaseType
       : undefined;
+    const inferredIncomingCaseType = inferCaseTypeFromText(currentText);
+    const lockedAreaSwitchHint = buildLockedAreaSwitchHint(lockedCaseType, inferredIncomingCaseType);
+
+    if (lockedCaseType && lockedAreaSwitchHint) {
+      return {
+        responseText: `${lockedAreaSwitchHint}\n\nSi prefieres seguir en la ruta actual, cuentame mas detalles del mismo caso (hecho principal, fecha y resultado esperado).`,
+        patch: { intent: 'consulta_laboral', step: 'ask_issue', profile },
+        payload: {
+          orchestrator: true,
+          correlationId: input.correlationId,
+          flow: 'stateful',
+          lockedCaseType,
+          incomingCaseType: inferredIncomingCaseType ?? null,
+          lockedAreaGuard: 'cross_area_blocked',
+        },
+      };
+    }
+
     const rememberedCaseType = typeof profile.detectedCaseType === 'string'
       ? profile.detectedCaseType
       : (typeof profile.pendingCaseType === 'string' ? profile.pendingCaseType : undefined);
@@ -3750,6 +3771,31 @@ ${SURVEY_RATING_TEXT}`,
       preferredCaseType,
       forcedCaseType: lockedCaseType,
     });
+
+    if (lockedCaseType && responseLooksInconsistentWithLockedCaseType(rag.responseText, lockedCaseType)) {
+      const fallbackDetail = `${buildClarifyingQuestions(lockedCaseType, currentText)}\n\nSi deseas cambiar a otra area, escribe *reset* y formula tu nueva consulta.`;
+      return {
+        responseText: truncateForWhatsapp(buildFriendlyOrientationResponse(buildNeedsContextFallback(lockedCaseType), fallbackDetail)),
+        patch: {
+          intent: 'consulta_laboral',
+          step: 'ask_issue',
+          profile: {
+            ...profile,
+            lastLaboralQuery: queryText,
+            lastRagNoSupport: true,
+            detectedCaseType: lockedCaseType,
+            pendingCaseType: lockedCaseType,
+          },
+        },
+        payload: {
+          orchestrator: true,
+          correlationId: input.correlationId,
+          flow: 'stateful',
+          ragGuard: 'blocked_inconsistent_response',
+          lockedCaseType,
+        },
+      };
+    }
 
     const nextPendingCaseType = rag.noSupport
       ? (lockedCaseType || rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || pendingCaseType || undefined)
@@ -4311,7 +4357,7 @@ function buildCompetenceOptionsList(options: CompetenceOption[]): string {
 }
 
 function buildNotCompetentMessage(snapshot: CompetenceGateSnapshot): string {
-  return `Gracias por la informacion. ⚠️ Por competencia, este caso no puede ser tramitado por el Consultorio Juridico.\n\nMotivo: ${snapshot.reason}\n\nSi podemos ayudarte en estos asuntos de *${snapshot.areaLabel}*:\n${buildCompetenceOptionsList(snapshot.options)}\n\nResponde con el numero de una opcion (por ejemplo: 1) o reformula tu caso segun una opcion atendible.`;
+  return `Gracias por la informacion. ⚠️ Por competencia, este caso no puede ser tramitado por el Consultorio Juridico.\n\nMotivo: ${snapshot.reason}\n\nSi podemos ayudarte en estos asuntos de *${snapshot.areaLabel}*:\n${buildCompetenceOptionsList(snapshot.options)}\n\nResponde con el numero de una opcion (por ejemplo: 1) o reformula tu caso segun una opcion atendible.\n\nSi ninguna opcion te sirve, escribe *reset* para iniciar una nueva consulta.`;
 }
 
 function isCompetenceFollowUpQuestion(text: string): boolean {
@@ -4331,7 +4377,41 @@ function isCompetenceFollowUpQuestion(text: string): boolean {
 }
 
 function buildCompetentDecisionMessage(areaLabel: string): string {
-  return `Gracias por la informacion. ✅ Por competencia, este caso SI puede ser orientado por el Consultorio Juridico en el area de *${areaLabel}*.\n\nSi deseas, te doy una ruta inicial de accion y los siguientes pasos recomendados para tu caso.`;
+  return `Gracias por la informacion. ✅ Por competencia, este caso SI puede ser orientado por el Consultorio Juridico en el area de *${areaLabel}*.\n\nSi deseas, te doy una ruta inicial de accion y los siguientes pasos recomendados para tu caso.\n\n${APPOINTMENT_OFFER_TEXT}`;
+}
+
+function buildLockedAreaSwitchHint(lockedCaseType?: string, incomingCaseType?: string): string {
+  const lockedArea = mapCaseTypeToCompetenceArea(lockedCaseType);
+  const incomingArea = mapCaseTypeToCompetenceArea(incomingCaseType);
+  if (!lockedArea || !incomingArea || lockedArea === incomingArea) return '';
+
+  const lockedLabel = getCompetenceAreaLabel(lockedArea);
+  const incomingLabel = getCompetenceAreaLabel(incomingArea);
+  return `En este momento tu consulta sigue en la ruta de *${lockedLabel}*. El mensaje parece de *${incomingLabel}*. Si deseas cambiar de area, escribe *reset* y describe tu nuevo caso.`;
+}
+
+function responseLooksInconsistentWithLockedCaseType(responseText: string, lockedCaseType?: string): boolean {
+  if (!lockedCaseType) return false;
+  const lockedArea = mapCaseTypeToCompetenceArea(lockedCaseType);
+  if (!lockedArea) return false;
+
+  const normalized = normalizeForMatch(responseText);
+  const caseTypeHeaderMatch = normalized.match(/tipo de caso:\s*([^\n]+)/);
+  if (caseTypeHeaderMatch?.[1]) {
+    const inferredHeaderCase = inferCaseTypeFromText(caseTypeHeaderMatch[1]);
+    const inferredHeaderArea = mapCaseTypeToCompetenceArea(inferredHeaderCase);
+    if (inferredHeaderArea && inferredHeaderArea !== lockedArea) return true;
+  }
+
+  if (lockedArea === 'familia') {
+    const laborLeak = ['empleador', 'prestaciones', 'cesantias', 'vacaciones', 'despido', 'contrato de trabajo']
+      .filter((token) => normalized.includes(token)).length;
+    const familySignals = ['familia', 'comisaria de familia', 'custodia', 'alimentos', 'liquidacion de sociedad', 'sociedad conyugal', 'sociedad patrimonial']
+      .filter((token) => normalized.includes(token)).length;
+    if (laborLeak >= 2 && familySignals === 0) return true;
+  }
+
+  return false;
 }
 
 function buildCompetenceNeedDetailsMessage(areaLabel?: string): string {
