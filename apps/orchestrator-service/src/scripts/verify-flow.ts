@@ -96,6 +96,48 @@ async function runScenario(scenario: Scenario, index: number): Promise<{
   };
 }
 
+async function runLockedAreaRegression(index: number): Promise<{ ok: boolean; details: string[] }> {
+  const conversationId = `locked-area-${Date.now()}-${index}`;
+  const externalUserId = `locked-area-user-${Date.now()}-${index}`;
+  const details: string[] = [];
+
+  await bootstrapConversation(externalUserId, conversationId);
+
+  const blocked = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-blocked`,
+    text: 'es un divorcio civil',
+  });
+
+  const pickOption = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-pick-option`,
+    text: '1',
+  });
+
+  const followup = await sendMessage({
+    externalUserId,
+    conversationId,
+    correlationId: `${conversationId}-followup`,
+    text: 'quiero liquidar 50 salarios',
+  });
+
+  const blockedOk = /no puede ser tramitado por el consultorio juridico/i.test(blocked.responseText);
+  const optionOk = /este asunto si esta dentro de nuestra competencia/i.test(pickOption.responseText);
+  const noLaboralLabel = !/tipo de caso:\s*laboral/i.test(followup.responseText);
+
+  details.push(`blocked_ok=${blockedOk ? 'yes' : 'no'}`);
+  details.push(`option_ok=${optionOk ? 'yes' : 'no'}`);
+  details.push(`no_laboral_label_after_lock=${noLaboralLabel ? 'yes' : 'no'}`);
+
+  return {
+    ok: blockedOk && optionOk && noLaboralLabel,
+    details,
+  };
+}
+
 async function run(): Promise<void> {
   const scenarios: Scenario[] = [
     {
@@ -241,6 +283,17 @@ async function run(): Promise<void> {
       console.log(`  appointment_hints_visible: ${output.appointmentHintsVisible ? 'yes' : 'no'}`);
     }
     console.log(`  response: ${output.responseText.replace(/\s+/g, ' ').trim()}`);
+  }
+
+  const lockedAreaRegression = await runLockedAreaRegression(scenarios.length + 1);
+  if (lockedAreaRegression.ok) {
+    console.log('[OK] locked-area-family-selection-regression');
+  } else {
+    wrong += 1;
+    console.log('[FAIL] locked-area-family-selection-regression');
+  }
+  for (const detail of lockedAreaRegression.details) {
+    console.log(`  ${detail}`);
   }
 
   const determinate = correct + wrong;

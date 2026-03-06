@@ -964,6 +964,9 @@ function clearTransientConsultationProfile(profile: Record<string, unknown>): Re
   delete next.lastRagNoSupport;
   delete next.lastLaboralQuery;
   delete next.competenceStatus;
+  delete next.competenceLockedArea;
+  delete next.competenceLockedCaseType;
+  delete next.competenceSelectionId;
   return next;
 }
 
@@ -1352,6 +1355,7 @@ async function resolveLaboralQuery(input: {
   tenantId: string;
   conversationId: string;
   preferredCaseType?: string;
+  forcedCaseType?: string;
 }): Promise<{ responseText: string; payload: Record<string, unknown>; noSupport: boolean; queryUsed: string; inferredCaseType?: string }> {
   const query = input.queryText.trim();
   if (!query) {
@@ -1364,25 +1368,26 @@ async function resolveLaboralQuery(input: {
   }
 
   const inferredFromQuery = inferCaseTypeFromText(query);
-  if (shouldUseQuickOrientation(query, inferredFromQuery)) {
+  const effectiveCaseType = input.forcedCaseType || inferredFromQuery || input.preferredCaseType;
+  if (shouldUseQuickOrientation(query, effectiveCaseType)) {
     return {
       responseText: truncateForWhatsapp(
         buildFriendlyOrientationResponse(
-          buildGuidanceWithOptionalContext(inferredFromQuery),
-          buildClarifyingQuestions(inferredFromQuery, query),
+          buildGuidanceWithOptionalContext(effectiveCaseType),
+          buildClarifyingQuestions(effectiveCaseType, query),
         ),
       ),
       payload: {
         correlationId: input.correlationId,
-        inferredCaseType: inferredFromQuery ?? null,
+        inferredCaseType: effectiveCaseType ?? null,
         rag: {
           status: 'skipped_quick_orientation',
-          reason: 'short_query_with_detected_case_type',
+          reason: input.forcedCaseType ? 'short_query_with_forced_case_type' : 'short_query_with_detected_case_type',
         },
       },
       noSupport: true,
       queryUsed: query,
-      inferredCaseType: inferredFromQuery,
+      inferredCaseType: effectiveCaseType,
     };
   }
 
@@ -1390,7 +1395,7 @@ async function resolveLaboralQuery(input: {
   try {
     const ragResult = await askRag(query, input.correlationId);
     const inferredFromRag = inferCaseTypeLabel(query, ragResult.answer);
-    const inferredCaseType = inferredFromRag || inferredFromQuery || input.preferredCaseType;
+    const inferredCaseType = input.forcedCaseType || inferredFromRag || inferredFromQuery || input.preferredCaseType;
     const fallbackKind = pickRagFallbackKind(ragResult);
     const isNoSupport = fallbackKind !== 'none';
     const responseText = fallbackKind === 'none'
@@ -1713,10 +1718,13 @@ async function runStatefulFlow(input: {
       ...profile,
       competenceGate: undefined,
       competenceStatus: 'competent',
+      competenceLockedArea: snapshot.areaKey,
+      competenceLockedCaseType: mapCompetenceAreaToCaseType(snapshot.areaKey),
       competenceArea: snapshot.areaLabel,
       competenceSelection: selected.label,
+      competenceSelectionId: selected.id,
       competenceUnlockedAt: new Date().toISOString(),
-      pendingCaseType: snapshot.areaLabel,
+      pendingCaseType: mapCompetenceAreaToCaseType(snapshot.areaKey) || snapshot.areaLabel,
       lastLaboralQuery: `${selected.label}. ${input.rawText.trim()}`,
       lastRagNoSupport: false,
     };
@@ -3588,13 +3596,17 @@ ${SURVEY_RATING_TEXT}`,
       };
     }
 
+    const lockedCaseType = typeof profile.competenceLockedCaseType === 'string'
+      ? profile.competenceLockedCaseType
+      : undefined;
     const rememberedCaseType = typeof profile.detectedCaseType === 'string'
       ? profile.detectedCaseType
       : (typeof profile.pendingCaseType === 'string' ? profile.pendingCaseType : undefined);
+    const caseTypeForAssessment = lockedCaseType || rememberedCaseType;
     const assessmentSource = isCompetenceFollowUpQuestion(currentText) && previousQuery
       ? `${previousQuery}\n\nPregunta del usuario: ${currentText}`
       : currentText;
-    const liveAssessment = assessCaseCompetence(assessmentSource, rememberedCaseType);
+    const liveAssessment = assessCaseCompetence(assessmentSource, caseTypeForAssessment);
     if (liveAssessment.status === 'not_competent' && liveAssessment.areaKey && liveAssessment.areaLabel) {
       const snapshot: CompetenceGateSnapshot = {
         areaKey: liveAssessment.areaKey,
@@ -3606,6 +3618,9 @@ ${SURVEY_RATING_TEXT}`,
       const nextProfile = {
         ...profile,
         competenceStatus: 'not_competent',
+        competenceLockedArea: undefined,
+        competenceLockedCaseType: undefined,
+        competenceSelectionId: undefined,
         competenceGate: snapshot,
       };
 
@@ -3636,7 +3651,7 @@ ${SURVEY_RATING_TEXT}`,
       const nextProfile = markConsultationAsActive({
         ...profile,
         competenceStatus: 'competent',
-        detectedCaseType: rememberedCaseType || inferCaseTypeFromText(previousQuery) || inferCaseTypeFromText(currentText),
+        detectedCaseType: caseTypeForAssessment || inferCaseTypeFromText(previousQuery) || inferCaseTypeFromText(currentText),
       });
 
       conversationStore.set(key, {
@@ -3671,8 +3686,8 @@ ${SURVEY_RATING_TEXT}`,
           profile: markConsultationAsActive({
             ...profile,
             competenceStatus: 'unknown',
-            pendingCaseType: rememberedCaseType,
-            detectedCaseType: rememberedCaseType,
+            pendingCaseType: caseTypeForAssessment,
+            detectedCaseType: caseTypeForAssessment,
           }),
         },
         payload: {
@@ -3686,6 +3701,7 @@ ${SURVEY_RATING_TEXT}`,
     }
 
     const pendingCaseType = typeof profile.pendingCaseType === 'string' ? profile.pendingCaseType : undefined;
+    const preferredCaseType = lockedCaseType || pendingCaseType;
 
     if (!env.ORCH_RAG_ENABLED) {
       return {
@@ -3704,11 +3720,12 @@ ${SURVEY_RATING_TEXT}`,
       correlationId: input.correlationId,
       tenantId: input.messageIn.tenantId,
       conversationId: input.conversationId,
-      preferredCaseType: pendingCaseType,
+      preferredCaseType,
+      forcedCaseType: lockedCaseType,
     });
 
     const nextPendingCaseType = rag.noSupport
-      ? (rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || pendingCaseType || undefined)
+      ? (lockedCaseType || rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || pendingCaseType || undefined)
       : undefined;
 
     const nextProfile = markConsultationAsActive({
@@ -3716,7 +3733,7 @@ ${SURVEY_RATING_TEXT}`,
       competenceStatus: hasPositiveCompetence(profile) ? 'competent' : 'unknown',
       lastLaboralQuery: rag.queryUsed,
       lastRagNoSupport: rag.noSupport,
-      detectedCaseType: rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || rememberedCaseType,
+      detectedCaseType: lockedCaseType || rag.inferredCaseType || inferCaseTypeFromText(currentText) || inferCaseTypeFromText(previousQuery) || rememberedCaseType,
       pendingCaseType: nextPendingCaseType,
     });
 
@@ -4206,6 +4223,17 @@ function getCompetenceAreaLabel(areaKey: CompetenceAreaKey): string {
   if (areaKey === 'familia') return 'Familia';
   if (areaKey === 'conciliacion') return 'Conciliacion';
   return 'Administrativo / Constitucional / Disciplinario / Fiscal';
+}
+
+function mapCompetenceAreaToCaseType(areaKey?: CompetenceAreaKey): string | undefined {
+  if (!areaKey) return undefined;
+  if (areaKey === 'laboral') return 'Laboral';
+  if (areaKey === 'penal') return 'Penal';
+  if (areaKey === 'civil') return 'Civil';
+  if (areaKey === 'comercial') return 'Comercial';
+  if (areaKey === 'familia') return 'Familia-alimentos';
+  if (areaKey === 'conciliacion') return 'Conciliación';
+  return 'Constitucional';
 }
 
 function hasAnyKeyword(normalized: string, keywords: string[]): boolean {
